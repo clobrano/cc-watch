@@ -479,7 +479,8 @@ func render(selected int) {
 	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   q quit%s\n", dim, reset)
 	b.WriteString("\033[J")
 
-	fmt.Print(b.String())
+	// raw mode clears OPOST/ONLCR so \n no longer implies \r; use \r\n explicitly.
+	fmt.Print(strings.ReplaceAll(b.String(), "\n", "\r\n"))
 }
 
 func sortedNames() []string {
