@@ -289,8 +289,14 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 
 func update(ctx context.Context) {
 	// One call lists every pane in every session with its running command.
+	//
+	// The fields are '|'-separated, not tab-separated: tmux sanitises control
+	// characters out of format output (3.4 rewrites a tab to '_'), so a tab
+	// delimiter yields one unsplittable field and no pane is ever matched.
+	// session_name comes last because it is the only field a user can put a
+	// '|' into — SplitN's 4-field limit then keeps such a name intact.
 	out, err := tmux(ctx, "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_command}")
+		"#{window_index}|#{pane_index}|#{pane_current_command}|#{session_name}")
 	if err != nil {
 		sessions = map[string]*session{}
 		return
@@ -301,11 +307,11 @@ func update(ctx context.Context) {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 4)
+		fields := strings.SplitN(line, "|", 4)
 		if len(fields) != 4 {
 			continue
 		}
-		sname, wIdx, pIdx, command := fields[0], fields[1], fields[2], fields[3]
+		wIdx, pIdx, command, sname := fields[0], fields[1], fields[2], fields[3]
 		if !isAgentCommand(strings.TrimSpace(command)) {
 			continue
 		}
