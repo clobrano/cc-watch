@@ -20,6 +20,10 @@ const (
 	refreshInterval = 2 * time.Second
 	idleThreshold   = 5 * time.Second
 	paneLines       = 80
+
+	// statusOption is the tmux user option the agent strip is published to.
+	// Reference it as #{@cc_watch_agents} from status-right/status-left.
+	statusOption = "@cc_watch_agents"
 )
 
 // Config is loaded from ~/.config/cc-watch/config.json.
@@ -82,6 +86,24 @@ func (s State) label() string {
 		return "error"
 	default:
 		return "unknown"
+	}
+}
+
+// tmuxColor mirrors color() using tmux style names, for the status bar strip.
+// colour244 stands in for the TUI's bright-black: tmux only gained "bright*"
+// names recently, while the 256-colour numbers work everywhere.
+func (s State) tmuxColor() string {
+	switch s {
+	case StateActive:
+		return "green"
+	case StateIdle:
+		return "yellow"
+	case StateWaiting:
+		return "cyan"
+	case StateError:
+		return "red"
+	default:
+		return "colour244"
 	}
 }
 
@@ -150,6 +172,7 @@ func main() {
 
 	defer func() {
 		cancel()
+		clearStatusBar()
 		if rawState != nil {
 			term.Restore(fd, rawState)
 		}
@@ -171,6 +194,7 @@ func main() {
 	defer ticker.Stop()
 
 	update(ctx)
+	updateStatusBar(ctx)
 	render(selected)
 
 	for {
@@ -185,6 +209,7 @@ func main() {
 
 		case <-ticker.C:
 			update(ctx)
+			updateStatusBar(ctx)
 			names := sortedNames()
 			if selected >= len(names) && len(names) > 0 {
 				selected = len(names) - 1
@@ -216,6 +241,7 @@ func main() {
 				}
 				attach(ctx, fd, names[selected], &rawState)
 				update(ctx)
+				updateStatusBar(ctx)
 				render(selected)
 			}
 		}
@@ -289,8 +315,14 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 
 func update(ctx context.Context) {
 	// One call lists every pane in every session with its running command.
+	//
+	// The fields are '|'-separated, not tab-separated: tmux sanitises control
+	// characters out of format output (3.4 rewrites a tab to '_'), so a tab
+	// delimiter yields one unsplittable field and no pane is ever matched.
+	// session_name comes last because it is the only field a user can put a
+	// '|' into — SplitN's 4-field limit then keeps such a name intact.
 	out, err := tmux(ctx, "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_command}")
+		"#{window_index}|#{pane_index}|#{pane_current_command}|#{session_name}")
 	if err != nil {
 		sessions = map[string]*session{}
 		return
@@ -301,11 +333,11 @@ func update(ctx context.Context) {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 4)
+		fields := strings.SplitN(line, "|", 4)
 		if len(fields) != 4 {
 			continue
 		}
-		sname, wIdx, pIdx, command := fields[0], fields[1], fields[2], fields[3]
+		wIdx, pIdx, command, sname := fields[0], fields[1], fields[2], fields[3]
 		if !isAgentCommand(strings.TrimSpace(command)) {
 			continue
 		}
@@ -509,6 +541,54 @@ func render(selected int) {
 
 	// raw mode clears OPOST/ONLCR so \n no longer implies \r; use \r\n explicitly.
 	fmt.Print(strings.ReplaceAll(b.String(), "\n", "\r\n"))
+}
+
+// updateStatusBar publishes a numbered, state-coloured strip of the detected
+// agents to a tmux user option, e.g. "1 2 3" with 1 green and 2 yellow. The
+// numbers are positional over the same sorted list the TUI renders, so agent N
+// in the status bar is row N in the dashboard — which also means they shift
+// when a pane appears or dies. The option is inert until referenced, so the
+// user places it themselves: set -ag status-right ' #{@cc_watch_agents}'.
+func updateStatusBar(ctx context.Context) {
+	var b strings.Builder
+	for i, key := range sortedNames() {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		// Trailing #[default] stops our colour leaking into whatever the user
+		// has placed after the strip in their status format.
+		fmt.Fprintf(&b, "#[fg=%s]%d", sessions[key].state.tmuxColor(), i+1)
+	}
+	if b.Len() > 0 {
+		b.WriteString("#[default]")
+	}
+	setStatusOption(ctx, b.String())
+}
+
+var lastStatus string // last value pushed, so unchanged polls cause no redraw
+
+// setStatusOption writes value to the user option and redraws clients, but only
+// when the value actually changed: refresh-client -S on every 2s poll would
+// force a status redraw for every attached client indefinitely.
+func setStatusOption(ctx context.Context, value string) {
+	if value == lastStatus {
+		return
+	}
+	lastStatus = value
+	if _, err := tmux(ctx, "set-option", "-g", statusOption, value); err != nil {
+		return
+	}
+	tmux(ctx, "refresh-client", "-S")
+}
+
+// clearStatusBar unsets the option on exit so a frozen strip does not linger in
+// the status bar. It builds its own commands rather than going through tmux()
+// because the context is already cancelled by the time this runs.
+func clearStatusBar() {
+	if err := exec.Command("tmux", "set-option", "-gu", statusOption).Run(); err != nil {
+		return
+	}
+	exec.Command("tmux", "refresh-client", "-S").Run()
 }
 
 func sortedNames() []string {
