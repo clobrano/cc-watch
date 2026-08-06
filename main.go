@@ -63,6 +63,7 @@ type State int
 
 const (
 	StateUnknown State = iota
+	StateStarting // first poll, not yet classified
 	StateActive
 	StateIdle
 	StateWaiting
@@ -71,6 +72,8 @@ const (
 
 func (s State) label() string {
 	switch s {
+	case StateStarting:
+		return "..."
 	case StateActive:
 		return "running"
 	case StateIdle:
@@ -86,6 +89,8 @@ func (s State) label() string {
 
 func (s State) color() string {
 	switch s {
+	case StateStarting:
+		return "\033[90m"
 	case StateActive:
 		return "\033[32m"
 	case StateIdle:
@@ -275,8 +280,9 @@ func update(ctx context.Context) {
 
 		s, ok := sessions[name]
 		if !ok {
-			s = &session{name: name, lastChange: time.Now()}
+			s = &session{name: name, lastChange: time.Now(), state: StateStarting}
 			sessions[name] = s
+			continue // show "..." for one cycle before classifying
 		}
 
 		title, _ := tmux(ctx, "display-message", "-p", "-t", exactPane(name), "#{pane_title}")
