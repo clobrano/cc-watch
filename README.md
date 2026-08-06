@@ -10,11 +10,11 @@ lets you jump straight to the one that needs you.
 ```
   cc-watch  15:04:05
 
-    SESSION                   STATE      LAST OUTPUT
-    ─────────────────────────────────────────────────────────────────────
-    notes                     running    Editing src/parser.go
-  > api:0.1                   waiting    Do you want to make this edit?
-    api:1.0                   idle       Done. Tests pass.
+    SESSION                   STATE      LAST PROMPT
+    ──────────────────────────────────────────────────────────────────────────
+    notes                     running    rewrite the parser to accept trailing...
+  > api:0.1                   waiting    add rate limiting to the /search endpoint
+    api:1.0                   idle       why is the integration suite flaky?
     scratch                   error      $
 ```
 
@@ -38,9 +38,29 @@ From those two signals it derives a state:
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
 
-The `LAST OUTPUT` column shows the last non-decorative line of the pane, with ANSI
-escapes and box-drawing characters stripped, so you can see what each agent is
-doing at a glance.
+The `LAST PROMPT` column shows the last thing **you** asked that agent to do. A
+pane's tail tells you little — mid-turn it is a spinner, and at rest it is the
+mode-hint footer, which reads the same for every agent — whereas the prompt is
+what actually distinguishes one session from another when four of them are idle
+at once.
+
+It is read from the transcript, where a submitted prompt is a `> ` line at the
+start of a line; the two-space-indented continuations Claude Code wraps long
+prompts onto are joined back onto it, so a multi-line prompt survives as far as
+the column width. Text typed into the input box but not yet sent is deliberately
+excluded — every line inside the box carries a `│`, which is what tells the two
+apart.
+
+Once seen, a prompt is kept: a long turn pushes it out of the captured window
+well before the agent is done, and blanking the column for the rest of the turn
+would defeat the point. When a pane is first noticed cc-watch does one deeper
+capture (`promptScrollback`, 400 lines) looking for the prompt of a turn already
+in flight, so agents that were running before you started the dashboard are not
+blank either.
+
+If no prompt can be found at all, the column falls back to the last
+non-decorative line of the pane, with ANSI escapes and box-drawing characters
+stripped.
 
 Panes that disappear are dropped from the list on the next refresh. When a single
 tmux session contains more than one agent pane, the display switches from the bare
@@ -175,9 +195,12 @@ The polling and classification constants are compile-time values at the top of
 `main.go`:
 
 ```go
-refreshInterval = 2 * time.Second  // how often tmux is polled
-idleThreshold   = 5 * time.Second  // unchanged output before idle/waiting
-paneLines       = 80               // lines of scrollback captured per pane
+refreshInterval  = 2 * time.Second  // how often tmux is polled
+idleThreshold    = 5 * time.Second  // unchanged output before idle/waiting
+paneLines        = 80               // lines of scrollback captured per pane
+promptScrollback = 400              // one-off deeper capture, to find the prompt
+                                    // of a turn already running when a pane is
+                                    // first seen
 ```
 
 ## License
