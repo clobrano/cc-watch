@@ -96,7 +96,23 @@ so add it wherever you want in your `.tmux.conf`:
 
 ```tmux
 set -ag status-right ' #{@cc_watch_agents}'
+set -g  status-right-length 60
 ```
+
+`-a` appends rather than replacing, so your existing clock and hostname survive.
+The length bump matters: `status-right-length` defaults to 40 and tmux truncates
+past it silently, so on a busy status line the agent digits are exactly what falls
+off the end — which looks like the feature not working. Put it on the left instead
+if you prefer, but raise the limit there too, as `status-left-length` defaults to
+just 10:
+
+```tmux
+set -ag status-left ' #{@cc_watch_agents}'
+set -g  status-left-length 40
+```
+
+Reload with `tmux source-file ~/.tmux.conf`. You do not need to touch
+`status-interval` — cc-watch redraws clients itself when the strip changes.
 
 You then get an at-a-glance indicator from any session:
 
@@ -118,6 +134,15 @@ clients only redrawn, via `refresh-client -S`) when the rendered string actually
 changes. On exit cc-watch unsets the option, so a frozen strip never lingers in
 your status bar — which also means the indicator is live only while the dashboard
 is running.
+
+To check the strip is live while cc-watch is running, read the raw option:
+
+```sh
+$ tmux show-options -gqv @cc_watch_agents
+#[fg=green]1 #[fg=yellow]2#[default]
+```
+
+Empty output means either cc-watch is not running or it found no agents.
 
 > Why it has to work this way: classification is history-dependent. `idle` and
 > `waiting` mean "unchanged for 5 seconds", which is only knowable by comparing
