@@ -1,4 +1,4 @@
-module cc-watch
+module github.com/clobrano/cc-watch
 
 go 1.25.0
 
