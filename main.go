@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
 
@@ -406,9 +405,20 @@ func extractDesc(pane string) string {
 		if l == "" || strings.ContainsAny(l, "╭╮╰╯│─╔╗╚╝═║") {
 			continue
 		}
-		return l // caller truncates to fit the terminal
+		return toASCII(l)
 	}
 	return ""
+}
+
+// toASCII keeps only printable ASCII (0x20–0x7E), dropping everything else.
+func toASCII(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 0x20 && r <= 0x7E {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // layout constants: chars consumed before the description column.
@@ -461,7 +471,7 @@ func render(selected int) {
 				pointer,
 				nameStyle, truncate(name, 24), reset,
 				s.state.color(), s.state.label(), reset,
-				dim, runewidth.Truncate(s.desc, descWidth, "…"), reset,
+				dim, truncate(s.desc, descWidth), reset,
 			)
 		}
 	}
@@ -484,7 +494,13 @@ func sortedNames() []string {
 func exactPane(name string) string { return "=" + name + ":" }
 
 func truncate(s string, n int) string {
-	return runewidth.Truncate(s, n, "…")
+	if len(s) <= n {
+		return s
+	}
+	if n <= 3 {
+		return s[:n]
+	}
+	return s[:n-3] + "..."
 }
 
 func lastNonEmptyLine(s string) string {
