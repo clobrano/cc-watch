@@ -150,7 +150,7 @@ func main() {
 		if rawState != nil {
 			term.Restore(fd, rawState)
 		}
-		fmt.Print("\033[?25h\033[2J\033[H")
+		fmt.Print("\033[?25h\033[?1049l") // show cursor, exit alternate screen
 	}()
 
 	keys := make(chan keyEvent, 4)
@@ -161,7 +161,7 @@ func main() {
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
 
-	fmt.Print("\033[?25l\033[2J")
+	fmt.Print("\033[?1049h\033[?25l") // enter alternate screen, hide cursor
 
 	selected := 0
 	ticker := time.NewTicker(refreshInterval)
@@ -232,7 +232,7 @@ func attach(ctx context.Context, fd int, name string, rawState **term.State) {
 	if *rawState != nil {
 		term.Restore(fd, *rawState)
 	}
-	fmt.Print("\033[?25h\033[2J\033[H")
+	fmt.Print("\033[?25h\033[?1049l") // show cursor, exit alt screen → tmux takes over
 
 	cmd := exec.Command("tmux", "attach-session", "-t", "="+name)
 	cmd.Stdin = os.Stdin
@@ -243,7 +243,7 @@ func attach(ctx context.Context, fd int, name string, rawState **term.State) {
 	if *rawState != nil {
 		*rawState, _ = term.MakeRaw(fd)
 	}
-	fmt.Print("\033[?25l\033[2J")
+	fmt.Print("\033[?1049h\033[?25l") // re-enter alt screen, hide cursor
 }
 
 func readKeys(ch chan<- keyEvent) {
@@ -399,8 +399,8 @@ func extractDesc(pane string) string {
 }
 
 // layout constants: chars consumed before the description column.
-// " ▶ " (3) + name (24) + "  " (2) + state (9) + "  " (2) = 40
-const prefixWidth = 40
+// "  " (2) + "▶ " (2) + name (24) + "  " (2) + state (9) + "  " (2) = 41
+const prefixWidth = 41
 
 func render(selected int) {
 	const (
@@ -411,18 +411,19 @@ func render(selected int) {
 
 	w := termWidth
 	if w < prefixWidth+10 {
-		w = prefixWidth + 10 // minimum usable width
+		w = prefixWidth + 10
 	}
-	descWidth := w - prefixWidth - 2 // 2 for left margin
-	sepWidth := w - 4                // 4 for "    " indent
+	descWidth := w - prefixWidth - 2 // 2-char right margin
+	sepWidth := w - 2                // matches row content width
 
 	var b strings.Builder
 	b.WriteString("\033[H")
 
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
+	// header indent matches row layout: 2 spaces + 2-char pointer slot = 4
 	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST OUTPUT", reset)
-	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
+	fmt.Fprintf(&b, "  %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
 	if len(names) == 0 {
@@ -436,7 +437,8 @@ func render(selected int) {
 				pointer = "▶ "
 				nameStyle = reset
 			}
-			fmt.Fprintf(&b, " %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
+			// 2 leading spaces + 2-char pointer = 4 chars, aligned with header indent
+			fmt.Fprintf(&b, "  %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
 				pointer,
 				nameStyle, truncate(name, 24), reset,
 				s.state.color(), s.state.label(), reset,
