@@ -225,9 +225,10 @@ func main() {
 // attach jumps to the named tmux session. Inside tmux it uses switch-client
 // (instant, TUI keeps running). Outside tmux it suspends the TUI, runs
 // attach-session as a subprocess, then resumes when the user detaches.
-func attach(ctx context.Context, fd int, name string, rawState **term.State) {
+func attach(ctx context.Context, fd int, key string, rawState **term.State) {
+	target := "=" + key
 	if os.Getenv("TMUX") != "" {
-		exec.CommandContext(ctx, "tmux", "switch-client", "-t", name).Run()
+		exec.CommandContext(ctx, "tmux", "switch-client", "-t", target).Run()
 		return
 	}
 	if *rawState != nil {
@@ -235,7 +236,7 @@ func attach(ctx context.Context, fd int, name string, rawState **term.State) {
 	}
 	fmt.Print("\033[?25h\033[?1049l") // show cursor, exit alt screen → tmux takes over
 
-	cmd := exec.Command("tmux", "attach-session", "-t", "="+name)
+	cmd := exec.Command("tmux", "attach-session", "-t", target)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -287,39 +288,47 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 }
 
 func update(ctx context.Context) {
-	out, err := tmux(ctx, "list-sessions", "-F", "#{session_name}")
+	// One call lists every pane in every session with its running command.
+	out, err := tmux(ctx, "list-panes", "-a", "-F",
+		"#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_command}")
 	if err != nil {
 		sessions = map[string]*session{}
 		return
 	}
 
 	seen := map[string]bool{}
-	for _, name := range strings.Split(strings.TrimSpace(out), "\n") {
-		if name == "" {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
 			continue
 		}
-
-		command, _ := tmux(ctx, "display-message", "-p", "-t", exactPane(name), "#{pane_current_command}")
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) != 4 {
+			continue
+		}
+		sname, wIdx, pIdx, command := fields[0], fields[1], fields[2], fields[3]
 		if !isAgentCommand(strings.TrimSpace(command)) {
 			continue
 		}
-		seen[name] = true
 
-		s, ok := sessions[name]
+		key := sname + ":" + wIdx + "." + pIdx // e.g. "notes:0.1"
+		target := "=" + key
+		seen[key] = true
+
+		s, ok := sessions[key]
 		if !ok {
-			pane, _ := tmux(ctx, "capture-pane", "-p", "-t", exactPane(name), "-S", fmt.Sprintf("-%d", paneLines))
-			s = &session{name: name, lastChange: time.Now(), state: StateStarting, lastPane: pane}
-			sessions[name] = s
+			pane, _ := tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", paneLines))
+			s = &session{name: key, lastChange: time.Now(), state: StateStarting, lastPane: pane}
+			sessions[key] = s
 			continue
 		}
 
-		// Hold "..." until we have observed the session for at least idleThreshold.
+		// Hold "..." until we have observed the pane for at least idleThreshold.
 		if s.state == StateStarting && time.Since(s.lastChange) < idleThreshold {
 			continue
 		}
 
-		title, _ := tmux(ctx, "display-message", "-p", "-t", exactPane(name), "#{pane_title}")
-		pane, _ := tmux(ctx, "capture-pane", "-p", "-t", exactPane(name), "-S", fmt.Sprintf("-%d", paneLines))
+		title, _ := tmux(ctx, "display-message", "-p", "-t", target, "#{pane_title}")
+		pane, _ := tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", paneLines))
 
 		if pane != s.lastPane {
 			s.lastChange = time.Now()
@@ -330,9 +339,9 @@ func update(ctx context.Context) {
 		s.desc = extractDesc(pane)
 	}
 
-	for name := range sessions {
-		if !seen[name] {
-			delete(sessions, name)
+	for key := range sessions {
+		if !seen[key] {
+			delete(sessions, key)
 		}
 	}
 }
@@ -464,8 +473,21 @@ func render(selected int) {
 	if len(names) == 0 {
 		fmt.Fprintf(&b, "\n  %sno agent sessions found%s\n", dim, reset)
 	} else {
-		for i, name := range names {
-			s := sessions[name]
+		// Count agent panes per session; if >1, display the full "session:W.P" key.
+		sessionCount := map[string]int{}
+		for _, key := range names {
+			sname := strings.SplitN(key, ":", 2)[0]
+			sessionCount[sname]++
+		}
+
+		for i, key := range names {
+			s := sessions[key]
+			sname := strings.SplitN(key, ":", 2)[0]
+			displayName := sname
+			if sessionCount[sname] > 1 {
+				displayName = key
+			}
+
 			pointer := "  "
 			nameStyle := dim
 			if i == selected {
@@ -475,7 +497,7 @@ func render(selected int) {
 			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
 			fmt.Fprintf(&b, "  %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
 				pointer,
-				nameStyle, truncate(name, 24), reset,
+				nameStyle, truncate(displayName, 24), reset,
 				s.state.color(), s.state.label(), reset,
 				dim, truncate(s.desc, descWidth), reset,
 			)
@@ -497,8 +519,6 @@ func sortedNames() []string {
 	sort.Strings(names)
 	return names
 }
-
-func exactPane(name string) string { return "=" + name + ":" }
 
 func truncate(s string, n int) string {
 	if len(s) <= n {
