@@ -33,7 +33,7 @@ From those two signals it derives a state:
 | --------- | ------ | ---------------------------------------------------------------------------- |
 | `...`     | grey   | Pane seen for the first time; held until enough output has been observed to classify |
 | `running` | green  | The agent is working — a braille spinner in the pane title, or output still changing |
-| `waiting` | cyan   | The Claude Code prompt box is on screen and nothing has changed for 5 seconds |
+| `waiting` | cyan   | The Claude Code prompt box is on screen and nothing has changed for 5 seconds. **Known not to fire against the newer borderless Claude Code UI**, which draws no box for the detector to find; such panes read `idle` instead |
 | `idle`    | yellow | Output has been unchanged for 5 seconds with no prompt box on screen          |
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
@@ -44,12 +44,18 @@ mode-hint footer, which reads the same for every agent — whereas the prompt is
 what actually distinguishes one session from another when four of them are idle
 at once.
 
-It is read from the transcript, where a submitted prompt is a `> ` line at the
-start of a line; the two-space-indented continuations Claude Code wraps long
-prompts onto are joined back onto it, so a multi-line prompt survives as far as
-the column width. Text typed into the input box but not yet sent is deliberately
-excluded — every line inside the box carries a `│`, which is what tells the two
-apart.
+It is read from the transcript, where a submitted prompt is a line opening with a
+prompt glyph at column 0 — ASCII `>` in older Claude Code builds, a chevron in
+the newer borderless UI, so a small family of glyphs is matched rather than one.
+The two-space-indented continuations Claude Code wraps long prompts onto are
+joined back on, so a multi-line prompt survives as far as the column width.
+
+Text typed but not yet sent is deliberately excluded. In the borderless UI the
+live input carries the same glyph as a submitted prompt, so shape cannot separate
+them — but it is always the bottom-most one on screen, which is anchor enough:
+above it is transcript, below it is only the mode-hint footer. The older UI walls
+its input off inside a box instead, so whichever turns up first scanning up from
+the footer, a box border or a bare glyph, marks the bottom of the input region.
 
 Once seen, a prompt is kept: a long turn pushes it out of the captured window
 well before the agent is done, and blanking the column for the rest of the turn

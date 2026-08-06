@@ -471,22 +471,70 @@ func paneText(pane string) []string {
 	return strings.Split(strings.TrimRight(clean, " \n\t"), "\n")
 }
 
-// extractPrompt returns the last prompt the user submitted, as Claude Code
-// renders it in the transcript: a "> " line at column 0, followed by the
-// two-space-indented continuation lines it wraps long prompts onto.
+// promptMarkers are the glyphs Claude Code has used to introduce a prompt line:
+// ASCII '>' in the older bordered UI, a chevron in the borderless one. Which one
+// you get depends on the version, so match the family rather than betting on a
+// single glyph.
+var promptMarkers = []rune{'>', '❯', '⟩', '›', '〉'}
+
+// promptMarker reports whether a line is a prompt line, returning its text. The
+// marker must sit at column 0 and be followed by a space or nothing: that keeps
+// out tool output containing a quoted line, which is always indented under a
+// '⎿', and keeps out prose that merely starts with an angle bracket. A line
+// carrying a '│' is inside the older UI's input box, not the transcript.
+func promptMarker(line string) (string, bool) {
+	r := []rune(strings.TrimRight(line, " \t"))
+	if len(r) == 0 || strings.ContainsRune(line, '│') {
+		return "", false
+	}
+	if len(r) > 1 && r[1] != ' ' {
+		return "", false
+	}
+	for _, m := range promptMarkers {
+		if r[0] == m {
+			return strings.TrimSpace(string(r[1:])), true
+		}
+	}
+	return "", false
+}
+
+// aboveInput cuts a pane down to its transcript, dropping the live input line
+// and everything under it.
 //
-// The input box paints a "> " line too — holding whatever is typed but not yet
-// sent — but every line inside the box carries a '│', which is what keeps it out
-// of here. Requiring the '>' at column 0 likewise keeps out tool output that
-// happens to contain a quoted line, since that is always indented under a '⎿'.
-func extractPrompt(pane string) string {
-	lines := paneText(pane)
+// The borderless UI marks the input with the same glyph it marks a submitted
+// prompt with, so the two cannot be told apart by shape — but the input is
+// always the bottom-most of them, which is anchor enough: above it is
+// transcript, below it is only the mode-hint footer.
+func aboveInput(lines []string) []string {
 	for i := len(lines) - 1; i >= 0; i-- {
-		l := strings.TrimRight(lines[i], " \t")
-		if !strings.HasPrefix(l, "> ") || strings.ContainsRune(l, '│') {
+		// Whichever of the two turns up first scanning up from the footer is the
+		// bottom of the input region — a box border in the older UI, a bare
+		// prompt glyph in the borderless one. Checking both in one pass is what
+		// keeps the older UI's submitted prompts, which are also column-0 marker
+		// lines, from being mistaken for its input.
+		if strings.ContainsRune(lines[i], '╰') {
+			return lines[:i]
+		}
+		if _, ok := promptMarker(lines[i]); ok {
+			return lines[:i]
+		}
+	}
+	return lines
+}
+
+// extractPrompt returns the last prompt the user submitted, as Claude Code
+// renders it in the transcript: a prompt line, plus the two-space-indented
+// continuation lines it wraps long prompts onto.
+func extractPrompt(pane string) string {
+	// Dropping the live input line first is what stops a half-typed follow-up
+	// from being reported as the last prompt.
+	lines := aboveInput(paneText(pane))
+	for i := len(lines) - 1; i >= 0; i-- {
+		text, ok := promptMarker(lines[i])
+		if !ok || text == "" {
 			continue
 		}
-		parts := []string{l[2:]}
+		parts := []string{text}
 		for _, next := range lines[i+1:] {
 			t := strings.TrimRight(next, " \t")
 			// A blank line, a new transcript element or any box edge ends the
@@ -502,17 +550,11 @@ func extractPrompt(pane string) string {
 }
 
 func extractDesc(pane string) string {
-	lines := paneText(pane)
-	// Cut the mode-hint footer Claude Code paints under the input box
-	// ("⏵⏵ accept edits on (shift+tab to cycle)    ⧉ for agents"). It is the last
-	// line on screen carrying no box-drawing characters, so without this the
-	// scan below returns it on every poll and never reaches the transcript.
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.ContainsRune(lines[i], '╰') {
-			lines = lines[:i]
-			break
-		}
-	}
+	// Same cut, for the same reason: without it this returns the mode-hint
+	// footer ("accept edits on (shift+tab to cycle)"), which is the last line on
+	// screen carrying no box-drawing characters and reads identically for every
+	// agent.
+	lines := aboveInput(paneText(pane))
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := strings.TrimSpace(lines[i])
 		if l == "" || strings.ContainsAny(l, "╭╮╰╯│─╔╗╚╝═║") {

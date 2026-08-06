@@ -21,6 +21,25 @@ const runningPane = "" +
 	"╰────────────────────────────────────────────╯\n" +
 	"  ⏵⏵ accept edits on (shift+tab to cycle)          ⧉ for agents\n"
 
+// borderlessPane is the newer Claude Code UI: no box around the input, a chevron
+// marking both the submitted prompt and the live input line, and the mode-hint
+// footer under it.
+const borderlessPane = "" +
+	"✻ recap: Added YouTube playlist polling to wui.\n" +
+	"\n" +
+	"⟩ it looks great, commit and push\n" +
+	"\n" +
+	"⏺ Bash(git push)\n" +
+	"  ⎿  To github.com:clobrano/wui.git\n" +
+	"       b870c0f..3faa53e  main → main\n" +
+	"\n" +
+	"⏺ Pushed. Commit 3faa53e — feat: YouTube playlist poller.\n" +
+	"\n" +
+	"✻ Brewed for 49m 7s\n" +
+	"\n" +
+	"⟩\n" +
+	"  ⏵⏵ accept edits on (shift+tab to cycle)\n"
+
 func TestExtractPrompt(t *testing.T) {
 	tests := []struct {
 		name string
@@ -45,8 +64,23 @@ func TestExtractPrompt(t *testing.T) {
 		},
 		{
 			name: "takes the most recent of several prompts",
-			pane: "> first thing\n\n⏺ Done.\n\n> second thing\n\n⏺ On it.\n",
+			pane: "⟩ first thing\n\n⏺ Done.\n\n⟩ second thing\n\n⏺ On it.\n\n⟩\n",
 			want: "second thing",
+		},
+		{
+			name: "reads a chevron prompt in the borderless UI",
+			pane: borderlessPane,
+			want: "it looks great, commit and push",
+		},
+		{
+			name: "ignores borderless input holding an unsent follow up",
+			pane: "⟩ the prompt I actually sent\n" +
+				"\n" +
+				"⏺ Working on it.\n" +
+				"\n" +
+				"⟩ half-written follow up\n" +
+				"  ⏵⏵ accept edits on (shift+tab to cycle)\n",
+			want: "the prompt I actually sent",
 		},
 		{
 			name: "ignores a quoted line inside tool output",
@@ -57,7 +91,7 @@ func TestExtractPrompt(t *testing.T) {
 		},
 		{
 			name: "strips ANSI escapes",
-			pane: "\x1b[1m> \x1b[0mmake the parser stricter\n",
+			pane: "\x1b[1m⟩ \x1b[0mmake the parser stricter\n\n⏺ On it.\n\n⟩\n",
 			want: "make the parser stricter",
 		},
 		{
@@ -81,6 +115,13 @@ func TestExtractDescSkipsTheModeHintFooter(t *testing.T) {
 	// for agents" — the same line for every agent, on every poll.
 	want := "Smooshing (18m 44s · 35.6k tokens)"
 	if got := extractDesc(runningPane); got != want {
+		t.Errorf("extractDesc() = %q, want %q", got, want)
+	}
+}
+
+func TestExtractDescSkipsTheFooterInTheBorderlessUI(t *testing.T) {
+	want := "Brewed for 49m 7s"
+	if got := extractDesc(borderlessPane); got != want {
 		t.Errorf("extractDesc() = %q, want %q", got, want)
 	}
 }
