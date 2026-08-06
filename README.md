@@ -29,14 +29,14 @@ command (`claude` by default), and inspects each of them:
 
 From those two signals it derives a state:
 
-| State     | Meaning                                                                            |
-| --------- | ---------------------------------------------------------------------------------- |
-| `...`     | Pane seen for the first time; held until enough output has been observed to classify |
-| `running` | The agent is working — a braille spinner in the pane title, or output still changing |
-| `waiting` | The Claude Code prompt box is on screen and nothing has changed for 5 seconds        |
-| `idle`    | Output has been unchanged for 5 seconds with no prompt box on screen                 |
-| `error`   | The tail of the pane is a bare shell prompt — the agent exited                       |
-| `unknown` | The pane is empty                                                                    |
+| State     | Colour | Meaning                                                                     |
+| --------- | ------ | ---------------------------------------------------------------------------- |
+| `...`     | grey   | Pane seen for the first time; held until enough output has been observed to classify |
+| `running` | green  | The agent is working — a braille spinner in the pane title, or output still changing |
+| `waiting` | cyan   | The Claude Code prompt box is on screen and nothing has changed for 5 seconds |
+| `idle`    | yellow | Output has been unchanged for 5 seconds with no prompt box on screen          |
+| `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
+| `unknown` | grey   | The pane is empty                                                            |
 
 The `LAST OUTPUT` column shows the last non-decorative line of the pane, with ANSI
 escapes and box-drawing characters stripped, so you can see what each agent is
@@ -86,6 +86,43 @@ Attaching adapts to where you are running from:
 
 The TUI uses the alternate screen buffer, so your scrollback is left intact, and it
 adapts to terminal resizes.
+
+## tmux status bar
+
+While it runs, cc-watch publishes a compact strip of every agent it has found to
+the tmux user option `@cc_watch_agents` — one number per agent, coloured by the
+same states as the dashboard. It is nothing but an option until you reference it,
+so add it wherever you want in your `.tmux.conf`:
+
+```tmux
+set -ag status-right ' #{@cc_watch_agents}'
+```
+
+You then get an at-a-glance indicator from any session:
+
+```
+                                              AGENTS 1 2 3
+                                                     │ │ └─ cyan:   waiting on you
+                                                     │ └─── yellow: idle
+                                                     └───── green:  running
+```
+
+The numbers are positional over the same sorted list the dashboard renders, so
+agent `2` in the status bar is row 2 in the TUI — the TUI is the legend that tells
+you which session that is. Because they are positional, they renumber whenever an
+agent pane appears or dies: a number is a pointer to a row, not a durable handle
+on a session.
+
+The strip is pushed on each 2-second poll, but the option is only rewritten (and
+clients only redrawn, via `refresh-client -S`) when the rendered string actually
+changes. On exit cc-watch unsets the option, so a frozen strip never lingers in
+your status bar — which also means the indicator is live only while the dashboard
+is running.
+
+> Why it has to work this way: classification is history-dependent. `idle` and
+> `waiting` mean "unchanged for 5 seconds", which is only knowable by comparing
+> consecutive polls. A one-shot `#(cc-watch --status)` invoked by tmux would start
+> cold every time and could only ever distinguish `running` from `error`.
 
 ## Configuration
 
