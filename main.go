@@ -307,9 +307,15 @@ func update(ctx context.Context) {
 
 		s, ok := sessions[name]
 		if !ok {
-			s = &session{name: name, lastChange: time.Now(), state: StateStarting}
+			pane, _ := tmux(ctx, "capture-pane", "-p", "-t", exactPane(name), "-S", fmt.Sprintf("-%d", paneLines))
+			s = &session{name: name, lastChange: time.Now(), state: StateStarting, lastPane: pane}
 			sessions[name] = s
-			continue // show "..." for one cycle before classifying
+			continue
+		}
+
+		// Hold "..." until we have observed the session for at least idleThreshold.
+		if s.state == StateStarting && time.Since(s.lastChange) < idleThreshold {
+			continue
 		}
 
 		title, _ := tmux(ctx, "display-message", "-p", "-t", exactPane(name), "#{pane_title}")
