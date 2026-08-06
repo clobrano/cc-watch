@@ -21,6 +21,13 @@ const (
 	idleThreshold   = 5 * time.Second
 	paneLines       = 80
 
+	// promptScrollback is how deep the one-off capture goes when a pane is first
+	// seen, looking for the prompt that started the turn. A pane that has been
+	// working for a while has pushed it well past the paneLines window, and
+	// without this an agent already running when cc-watch starts shows no prompt
+	// until the user types the next one.
+	promptScrollback = 400
+
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
 	statusOption = "@cc_watch_agents"
@@ -133,6 +140,7 @@ type session struct {
 	name       string
 	state      State
 	desc       string
+	prompt     string
 	lastChange time.Time
 	lastPane   string
 }
@@ -348,8 +356,14 @@ func update(ctx context.Context) {
 
 		s, ok := sessions[key]
 		if !ok {
-			pane, _ := tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", paneLines))
+			pane, _ := capture(ctx, target, paneLines)
 			s = &session{name: key, lastChange: time.Now(), state: StateStarting, lastPane: pane}
+			// Pay for one deep capture here, not on every poll: from now on the
+			// prompt is sticky and the paneLines window is enough to notice a
+			// newer one.
+			if deep, err := capture(ctx, target, promptScrollback); err == nil {
+				s.prompt = extractPrompt(deep)
+			}
 			sessions[key] = s
 			continue
 		}
@@ -360,7 +374,7 @@ func update(ctx context.Context) {
 		}
 
 		title, _ := tmux(ctx, "display-message", "-p", "-t", target, "#{pane_title}")
-		pane, _ := tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", paneLines))
+		pane, _ := capture(ctx, target, paneLines)
 
 		if pane != s.lastPane {
 			s.lastChange = time.Now()
@@ -369,6 +383,12 @@ func update(ctx context.Context) {
 
 		s.state = classify(pane, strings.TrimSpace(title), s.lastChange)
 		s.desc = extractDesc(pane)
+		// Only overwrite on a hit: once the turn's output has pushed the prompt
+		// out of the captured window we want to keep showing the last one we saw,
+		// not blank the column for the rest of the turn.
+		if p := extractPrompt(pane); p != "" {
+			s.prompt = p
+		}
 	}
 
 	for key := range sessions {
@@ -443,29 +463,123 @@ func isAgentCommand(cmd string) bool {
 	return false
 }
 
-func extractDesc(pane string) string {
+// paneText splits a capture into lines with ANSI escapes and carriage returns
+// removed, ready for the scanners below.
+func paneText(pane string) []string {
 	clean := ansiEscape.ReplaceAllString(pane, "")
 	clean = strings.ReplaceAll(clean, "\r", "")
-	lines := strings.Split(strings.TrimRight(clean, " \n\t"), "\n")
+	return strings.Split(strings.TrimRight(clean, " \n\t"), "\n")
+}
+
+// promptMarkers are the glyphs Claude Code has used to introduce a prompt line:
+// ASCII '>' in the older bordered UI, a chevron in the borderless one. Which one
+// you get depends on the version, so match the family rather than betting on a
+// single glyph.
+var promptMarkers = []rune{'>', '❯', '⟩', '›', '〉'}
+
+// promptMarker reports whether a line is a prompt line, returning its text. The
+// marker must sit at column 0 and be followed by a space or nothing: that keeps
+// out tool output containing a quoted line, which is always indented under a
+// '⎿', and keeps out prose that merely starts with an angle bracket. A line
+// carrying a '│' is inside the older UI's input box, not the transcript.
+func promptMarker(line string) (string, bool) {
+	r := []rune(strings.TrimRight(line, " \t"))
+	if len(r) == 0 || strings.ContainsRune(line, '│') {
+		return "", false
+	}
+	if len(r) > 1 && r[1] != ' ' {
+		return "", false
+	}
+	for _, m := range promptMarkers {
+		if r[0] == m {
+			return strings.TrimSpace(string(r[1:])), true
+		}
+	}
+	return "", false
+}
+
+// aboveInput cuts a pane down to its transcript, dropping the live input line
+// and everything under it.
+//
+// The borderless UI marks the input with the same glyph it marks a submitted
+// prompt with, so the two cannot be told apart by shape — but the input is
+// always the bottom-most of them, which is anchor enough: above it is
+// transcript, below it is only the mode-hint footer.
+func aboveInput(lines []string) []string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		// Whichever of the two turns up first scanning up from the footer is the
+		// bottom of the input region — a box border in the older UI, a bare
+		// prompt glyph in the borderless one. Checking both in one pass is what
+		// keeps the older UI's submitted prompts, which are also column-0 marker
+		// lines, from being mistaken for its input.
+		if strings.ContainsRune(lines[i], '╰') {
+			return lines[:i]
+		}
+		if _, ok := promptMarker(lines[i]); ok {
+			return lines[:i]
+		}
+	}
+	return lines
+}
+
+// extractPrompt returns the last prompt the user submitted, as Claude Code
+// renders it in the transcript: a prompt line, plus the two-space-indented
+// continuation lines it wraps long prompts onto.
+func extractPrompt(pane string) string {
+	// Dropping the live input line first is what stops a half-typed follow-up
+	// from being reported as the last prompt.
+	lines := aboveInput(paneText(pane))
+	for i := len(lines) - 1; i >= 0; i-- {
+		text, ok := promptMarker(lines[i])
+		if !ok || text == "" {
+			continue
+		}
+		parts := []string{text}
+		for _, next := range lines[i+1:] {
+			t := strings.TrimRight(next, " \t")
+			// A blank line, a new transcript element or any box edge ends the
+			// prompt; anything else indented to align under it is continuation.
+			if !strings.HasPrefix(t, "  ") || strings.ContainsAny(t, "╭╮╰╯│⏺⎿") {
+				break
+			}
+			parts = append(parts, t)
+		}
+		return toDisplay(strings.Join(parts, " "))
+	}
+	return ""
+}
+
+func extractDesc(pane string) string {
+	// Same cut, for the same reason: without it this returns the mode-hint
+	// footer ("accept edits on (shift+tab to cycle)"), which is the last line on
+	// screen carrying no box-drawing characters and reads identically for every
+	// agent.
+	lines := aboveInput(paneText(pane))
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := strings.TrimSpace(lines[i])
 		if l == "" || strings.ContainsAny(l, "╭╮╰╯│─╔╗╚╝═║") {
 			continue
 		}
-		return toASCII(l)
+		return toDisplay(l)
 	}
 	return ""
 }
 
-// toASCII keeps only printable ASCII (0x20–0x7E), dropping everything else.
-func toASCII(s string) string {
+// toDisplay keeps printable ASCII plus Latin-1 Supplement and Latin Extended-A/B,
+// so accented prompt text survives, and drops everything else — box drawing, the
+// transcript glyphs, CJK and emoji — because those render two columns wide in
+// most terminals and would break the table alignment. Whitespace runs collapse to
+// a single space, which also tidies the gaps left where glyphs were dropped.
+func toDisplay(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if r >= 0x20 && r <= 0x7E {
+		if r >= 0x20 && r <= 0x7E || r >= 0xA0 && r <= 0x24F {
 			b.WriteRune(r)
+		} else {
+			b.WriteRune(' ')
 		}
 	}
-	return strings.TrimSpace(b.String())
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // layout constants: chars consumed before the description column.
@@ -498,7 +612,7 @@ func render(selected int) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
 	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
-	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST OUTPUT", reset)
+	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST PROMPT", reset)
 	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
@@ -526,12 +640,19 @@ func render(selected int) {
 				pointer = "> "
 				nameStyle = reset
 			}
+			// Fall back to the last line of output for a pane whose prompt has
+			// never been on screen while we were watching — an agent started
+			// long before cc-watch, whose prompt is past promptScrollback.
+			text := s.prompt
+			if text == "" {
+				text = s.desc
+			}
 			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
 			fmt.Fprintf(&b, "  %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
 				pointer,
 				nameStyle, truncate(displayName, 24), reset,
 				s.state.color(), s.state.label(), reset,
-				dim, truncate(s.desc, descWidth), reset,
+				dim, truncate(text, descWidth), reset,
 			)
 		}
 	}
@@ -600,14 +721,18 @@ func sortedNames() []string {
 	return names
 }
 
+// truncate cuts to n columns, counting runes rather than bytes: prompt text can
+// carry multi-byte characters, and slicing those by byte both overcounts the
+// width and can split a rune into garbage.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
 	if n <= 3 {
-		return s[:n]
+		return string(r[:n])
 	}
-	return s[:n-3] + "..."
+	return string(r[:n-3]) + "..."
 }
 
 func lastNonEmptyLine(s string) string {
@@ -618,6 +743,11 @@ func lastNonEmptyLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// capture reads the last n lines of a pane, scrollback included.
+func capture(ctx context.Context, target string, n int) (string, error) {
+	return tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", n))
 }
 
 func tmux(ctx context.Context, args ...string) (string, error) {
