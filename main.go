@@ -136,14 +136,19 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	fd := int(os.Stdin.Fd())
+	// Use /dev/tty for terminal operations so they work regardless of how
+	// stdin/stdout are connected (e.g. inside tmux, under wrappers, etc.).
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		tty = os.Stdin // best-effort fallback
+	}
+	fd := int(tty.Fd())
+
 	var rawState *term.State
 	if term.IsTerminal(fd) {
 		rawState, _ = term.MakeRaw(fd)
-		if w, _, err := term.GetSize(fd); err == nil {
-			termWidth = w
-		}
 	}
+	termWidth = queryWidth(fd)
 
 	defer func() {
 		cancel()
@@ -155,7 +160,7 @@ func main() {
 
 	keys := make(chan keyEvent, 4)
 	if rawState != nil {
-		go readKeys(keys)
+		go readKeys(tty, keys)
 	}
 
 	winch := make(chan os.Signal, 1)
@@ -176,9 +181,7 @@ func main() {
 			return
 
 		case <-winch:
-			if w, _, err := term.GetSize(fd); err == nil {
-				termWidth = w
-			}
+			termWidth = queryWidth(fd)
 			fmt.Print("\033[2J")
 			render(selected)
 
@@ -246,10 +249,20 @@ func attach(ctx context.Context, fd int, name string, rawState **term.State) {
 	fmt.Print("\033[?1049h\033[?25l") // re-enter alt screen, hide cursor
 }
 
-func readKeys(ch chan<- keyEvent) {
+// queryWidth tries multiple fds to get the terminal width reliably.
+func queryWidth(fd int) int {
+	for _, f := range []int{fd, int(os.Stdout.Fd()), int(os.Stderr.Fd())} {
+		if w, _, err := term.GetSize(f); err == nil && w > 10 {
+			return w
+		}
+	}
+	return 80
+}
+
+func readKeys(tty *os.File, ch chan<- keyEvent) {
 	buf := make([]byte, 16)
 	for {
-		n, err := os.Stdin.Read(buf)
+		n, err := tty.Read(buf)
 		if err != nil || n == 0 {
 			return
 		}
@@ -412,6 +425,10 @@ func render(selected int) {
 		dim   = "\033[2m"
 	)
 
+	// Re-query on every render so a wrong initial value self-corrects within one cycle.
+	if fresh := queryWidth(int(os.Stdout.Fd())); fresh > 10 {
+		termWidth = fresh
+	}
 	w := termWidth
 	if w < prefixWidth+10 {
 		w = prefixWidth + 10
