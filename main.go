@@ -13,8 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
-
+	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
 
@@ -336,7 +335,7 @@ func update(ctx context.Context) {
 func classify(pane, title string, lastChange time.Time) State {
 	// Braille spinner in the OSC title = Claude Code actively working.
 	if t := strings.TrimSpace(title); t != "" {
-		if r, _ := utf8.DecodeRuneInString(t); r >= 0x2800 && r <= 0x28FF {
+		if r := []rune(t)[0]; r >= 0x2800 && r <= 0x28FF {
 			return StateActive
 		}
 	}
@@ -437,7 +436,7 @@ func render(selected int) {
 	sepWidth := w - 5                // indent(4) + 1 right margin
 
 	var b strings.Builder
-	b.WriteString("\033[H")
+	b.WriteString("\033[2J\033[H") // clear entire screen, go home
 
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
@@ -462,7 +461,7 @@ func render(selected int) {
 				pointer,
 				nameStyle, truncate(name, 24), reset,
 				s.state.color(), s.state.label(), reset,
-				dim, truncate(s.desc, descWidth), reset,
+				dim, runewidth.Truncate(s.desc, descWidth, "…"), reset,
 			)
 		}
 	}
@@ -485,11 +484,7 @@ func sortedNames() []string {
 func exactPane(name string) string { return "=" + name + ":" }
 
 func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n-1]) + "…"
+	return runewidth.Truncate(s, n, "…")
 }
 
 func lastNonEmptyLine(s string) string {
