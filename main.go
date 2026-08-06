@@ -387,6 +387,7 @@ func isAgentCommand(cmd string) bool {
 
 func extractDesc(pane string) string {
 	clean := ansiEscape.ReplaceAllString(pane, "")
+	clean = strings.ReplaceAll(clean, "\r", "")
 	lines := strings.Split(strings.TrimRight(clean, " \n\t"), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := strings.TrimSpace(lines[i])
@@ -399,7 +400,9 @@ func extractDesc(pane string) string {
 }
 
 // layout constants: chars consumed before the description column.
-// "  " (2) + "▶ " (2) + name (24) + "  " (2) + state (9) + "  " (2) = 41
+// "  " (2) + "> " (2) + name (24) + "  " (2) + state (9) + "  " (2) = 41
+// Using ASCII ">" for the pointer — unicode triangles render as 2-column wide
+// glyphs in most terminals, which breaks column alignment.
 const prefixWidth = 41
 
 func render(selected int) {
@@ -413,17 +416,17 @@ func render(selected int) {
 	if w < prefixWidth+10 {
 		w = prefixWidth + 10
 	}
-	descWidth := w - prefixWidth - 2 // 2-char right margin
-	sepWidth := w - 2                // matches row content width
+	descWidth := w - prefixWidth - 3 // 3-char right margin keeps lines from touching the edge
+	sepWidth := w - 5                // indent(4) + 1 right margin
 
 	var b strings.Builder
 	b.WriteString("\033[H")
 
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
-	// header indent matches row layout: 2 spaces + 2-char pointer slot = 4
+	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
 	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST OUTPUT", reset)
-	fmt.Fprintf(&b, "  %s\n", strings.Repeat("─", sepWidth))
+	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
 	if len(names) == 0 {
@@ -434,10 +437,10 @@ func render(selected int) {
 			pointer := "  "
 			nameStyle := dim
 			if i == selected {
-				pointer = "▶ "
+				pointer = "> "
 				nameStyle = reset
 			}
-			// 2 leading spaces + 2-char pointer = 4 chars, aligned with header indent
+			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
 			fmt.Fprintf(&b, "  %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
 				pointer,
 				nameStyle, truncate(name, 24), reset,
