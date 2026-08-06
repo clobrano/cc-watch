@@ -104,7 +104,10 @@ func (s State) color() string {
 	}
 }
 
-var ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07]*\x07|[PX^_][^\x1b]*\x1b\\|.)`)
+var (
+	ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07]*\x07|[PX^_][^\x1b]*\x1b\\|.)`)
+	termWidth  = 80 // updated from terminal on start and on SIGWINCH
+)
 
 type session struct {
 	name       string
@@ -137,6 +140,9 @@ func main() {
 	var rawState *term.State
 	if term.IsTerminal(fd) {
 		rawState, _ = term.MakeRaw(fd)
+		if w, _, err := term.GetSize(fd); err == nil {
+			termWidth = w
+		}
 	}
 
 	defer func() {
@@ -152,6 +158,9 @@ func main() {
 		go readKeys(keys)
 	}
 
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+
 	fmt.Print("\033[?25l\033[2J")
 
 	selected := 0
@@ -165,6 +174,13 @@ func main() {
 		select {
 		case <-ctx.Done():
 			return
+
+		case <-winch:
+			if w, _, err := term.GetSize(fd); err == nil {
+				termWidth = w
+			}
+			fmt.Print("\033[2J")
+			render(selected)
 
 		case <-ticker.C:
 			update(ctx)
@@ -377,10 +393,14 @@ func extractDesc(pane string) string {
 		if l == "" || strings.ContainsAny(l, "╭╮╰╯│─╔╗╚╝═║") {
 			continue
 		}
-		return truncate(l, 60)
+		return l // caller truncates to fit the terminal
 	}
 	return ""
 }
+
+// layout constants: chars consumed before the description column.
+// " ▶ " (3) + name (24) + "  " (2) + state (9) + "  " (2) = 40
+const prefixWidth = 40
 
 func render(selected int) {
 	const (
@@ -389,13 +409,20 @@ func render(selected int) {
 		dim   = "\033[2m"
 	)
 
+	w := termWidth
+	if w < prefixWidth+10 {
+		w = prefixWidth + 10 // minimum usable width
+	}
+	descWidth := w - prefixWidth - 2 // 2 for left margin
+	sepWidth := w - 4                // 4 for "    " indent
+
 	var b strings.Builder
 	b.WriteString("\033[H")
 
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
 	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST OUTPUT", reset)
-	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", 90))
+	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
 	if len(names) == 0 {
@@ -413,7 +440,7 @@ func render(selected int) {
 				pointer,
 				nameStyle, truncate(name, 24), reset,
 				s.state.color(), s.state.label(), reset,
-				dim, s.desc, reset,
+				dim, truncate(s.desc, descWidth), reset,
 			)
 		}
 	}
