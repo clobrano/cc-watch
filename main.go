@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -152,8 +153,46 @@ var (
 )
 
 func main() {
+	serve := flag.Bool("serve", false,
+		"run in the background as a daemon, publishing only the tmux status strip (no dashboard)")
+	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
+	foreground := flag.Bool("foreground", false,
+		"with --serve, run the daemon loop in this process instead of detaching")
+	flag.Parse()
+
+	if *serve && *stop {
+		fmt.Fprintln(os.Stderr, "cc-watch: --serve and --stop-server are mutually exclusive")
+		os.Exit(2)
+	}
+
 	cfg = loadConfig()
 
+	switch {
+	case *stop:
+		if err := stopServer(); err != nil {
+			fmt.Fprintln(os.Stderr, "cc-watch:", err)
+			os.Exit(1)
+		}
+		return
+
+	case *serve:
+		// The backgrounded child re-enters here with daemonEnv set, and runs
+		// the loop instead of spawning yet another copy of itself.
+		run := startDaemon
+		if *foreground || os.Getenv(daemonEnv) != "" {
+			run = runServe
+		}
+		if err := run(); err != nil {
+			fmt.Fprintln(os.Stderr, "cc-watch:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	runTUI()
+}
+
+func runTUI() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	// Use /dev/tty for terminal operations so they work regardless of how
@@ -172,7 +211,12 @@ func main() {
 
 	defer func() {
 		cancel()
-		clearStatusBar()
+		// Leave the strip alone if a daemon is also publishing it: unsetting
+		// the option here would blank the status bar until the daemon's next
+		// *change* of value, which may be minutes away.
+		if !daemonRunning() {
+			clearStatusBar()
+		}
 		if rawState != nil {
 			term.Restore(fd, rawState)
 		}
