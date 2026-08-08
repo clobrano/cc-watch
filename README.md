@@ -210,17 +210,33 @@ happens to have inherited that pid.
 
 ### systemd
 
-`--serve` returns as soon as the daemon is up, so a user unit describes it as
-`Type=forking` and points systemd at the pid file (`%t` is `$XDG_RUNTIME_DIR`):
+The daemon is per-user and needs `$XDG_RUNTIME_DIR`, so it belongs in a **user**
+unit, not a system one. Write `~/.config/systemd/user/cc-watch.service`:
 
 ```ini
+[Unit]
+Description=cc-watch tmux status daemon
+
 [Service]
 Type=forking
 PIDFile=%t/cc-watch/daemon.pid
 ExecStart=%h/go/bin/cc-watch --serve
 ExecStop=%h/go/bin/cc-watch --stop-server
 Restart=on-failure
+
+[Install]
+WantedBy=default.target
 ```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now cc-watch
+```
+
+`Type=forking` is the right description: `--serve` starts the daemon and exits,
+leaving the child behind. `%t` expands to `$XDG_RUNTIME_DIR`, which is exactly
+where the pid file lands, so systemd tracks the daemon rather than the launcher.
+Adjust `%h/go/bin/cc-watch` if the binary lives elsewhere.
 
 ## Configuration
 
