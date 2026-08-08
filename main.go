@@ -156,8 +156,6 @@ func main() {
 	serve := flag.Bool("serve", false,
 		"run in the background as a daemon, publishing only the tmux status strip (no dashboard)")
 	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
-	foreground := flag.Bool("foreground", false,
-		"with --serve, run the daemon loop in this process instead of detaching")
 	flag.Parse()
 
 	if *serve && *stop {
@@ -179,7 +177,7 @@ func main() {
 		// The backgrounded child re-enters here with daemonEnv set, and runs
 		// the loop instead of spawning yet another copy of itself.
 		run := startDaemon
-		if *foreground || os.Getenv(daemonEnv) != "" {
+		if os.Getenv(daemonEnv) != "" {
 			run = runServe
 		}
 		if err := run(); err != nil {

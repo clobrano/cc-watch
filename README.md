@@ -94,7 +94,6 @@ adapts to terminal resizes.
 | _(none)_        | Run the interactive dashboard                                           |
 | `--serve`       | Start the background daemon: [tmux status bar](#tmux-status-bar) only, no dashboard |
 | `--stop-server` | Stop the running daemon                                                 |
-| `--foreground`  | With `--serve`, run the daemon loop in this process instead of detaching |
 
 ## tmux status bar
 
@@ -211,12 +210,15 @@ happens to have inherited that pid.
 
 ### systemd
 
-`--foreground` runs the loop in the current process, which is what a service
-manager wants:
+`--serve` returns as soon as the daemon is up, so a user unit describes it as
+`Type=forking` and points systemd at the pid file (`%t` is `$XDG_RUNTIME_DIR`):
 
 ```ini
 [Service]
-ExecStart=%h/go/bin/cc-watch --serve --foreground
+Type=forking
+PIDFile=%t/cc-watch/daemon.pid
+ExecStart=%h/go/bin/cc-watch --serve
+ExecStop=%h/go/bin/cc-watch --stop-server
 Restart=on-failure
 ```
 

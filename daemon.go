@@ -132,15 +132,12 @@ func startDaemon() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	pid := cmd.Process.Pid
 	cmd.Process.Release() // no wait(): the child is orphaned to init on purpose
 
 	deadline := time.Now().Add(stopTimeout)
 	for time.Now().Before(deadline) {
 		if daemonRunning() {
-			pid, err := daemonPID()
-			if err != nil {
-				return err
-			}
 			fmt.Printf("cc-watch daemon started (pid %d)\n", pid)
 			return nil
 		}
