@@ -87,6 +87,14 @@ Attaching adapts to where you are running from:
 The TUI uses the alternate screen buffer, so your scrollback is left intact, and it
 adapts to terminal resizes.
 
+### Flags
+
+| Flag            | Action                                                                  |
+| --------------- | ----------------------------------------------------------------------- |
+| _(none)_        | Run the interactive dashboard                                           |
+| `--serve`       | Start the background daemon: [tmux status bar](#tmux-status-bar) only, no dashboard |
+| `--stop-server` | Stop the running daemon                                                 |
+
 ## tmux status bar
 
 While it runs, cc-watch publishes a compact strip of every agent it has found to
@@ -132,8 +140,9 @@ on a session.
 The strip is pushed on each 2-second poll, but the option is only rewritten (and
 clients only redrawn, via `refresh-client -S`) when the rendered string actually
 changes. On exit cc-watch unsets the option, so a frozen strip never lingers in
-your status bar — which also means the indicator is live only while the dashboard
-is running.
+your status bar — which also means the indicator is live only while cc-watch is
+running. To keep it live without keeping the dashboard open, run the daemon
+described in [Daemon mode](#daemon-mode).
 
 To check the strip is live while cc-watch is running, read the raw option:
 
@@ -148,6 +157,86 @@ Empty output means either cc-watch is not running or it found no agents.
 > `waiting` mean "unchanged for 5 seconds", which is only knowable by comparing
 > consecutive polls. A one-shot `#(cc-watch --status)` invoked by tmux would start
 > cold every time and could only ever distinguish `running` from `error`.
+
+## Daemon mode
+
+The status strip needs a long-running process behind it, but it does not need the
+dashboard. `--serve` starts cc-watch in the background with the tmux support only:
+the same 2-second poll and the same `@cc_watch_agents` option, no TUI, no terminal
+of its own.
+
+```sh
+$ cc-watch --serve
+cc-watch daemon started (pid 48213)
+$ cc-watch --stop-server
+cc-watch daemon stopped (pid 48213)
+```
+
+`--serve` re-executes cc-watch in a new session (`setsid`), so the daemon outlives
+the shell that started it, and returns only once the child is actually up — if it
+fails to start you get an error instead of a silent no-op. `--stop-server` sends
+`SIGTERM` and waits for it to exit; the daemon unsets `@cc_watch_agents` on the way
+out, so the strip disappears with it.
+
+Only one daemon runs at a time. A second `--serve` reports the running pid and
+exits non-zero rather than starting a rival poller.
+
+Put it in your `.tmux.conf` to have the strip come up with tmux itself:
+
+```tmux
+run-shell -b 'cc-watch --serve'
+```
+
+`-b` keeps tmux from blocking on it, and starting it twice is harmless — the
+second call sees the first daemon and exits.
+
+The daemon and the dashboard can run at the same time — they compute the same
+strip from the same tmux state, so they agree, and quitting the TUI leaves the
+daemon's strip alone rather than clearing it.
+
+State lives in `$XDG_RUNTIME_DIR/cc-watch/` (falling back to
+`$TMPDIR/cc-watch-$UID/`):
+
+| File         | Contents                                                          |
+| ------------ | ----------------------------------------------------------------- |
+| `daemon.pid` | The daemon's pid, and the lock file that makes "running" knowable  |
+| `daemon.log` | Daemon start/stop lines — the first place to look if `--serve` fails |
+
+Liveness is an advisory lock (`flock`) on the pid file, not the pid itself. The
+kernel drops the lock when the holder dies, so a daemon that is `SIGKILL`ed leaves
+nothing stale to clean up: the next `--serve` just starts, and `--stop-server`
+correctly reports that nothing is running instead of signalling whatever process
+happens to have inherited that pid.
+
+### systemd
+
+The daemon is per-user and needs `$XDG_RUNTIME_DIR`, so it belongs in a **user**
+unit, not a system one. Write `~/.config/systemd/user/cc-watch.service`:
+
+```ini
+[Unit]
+Description=cc-watch tmux status daemon
+
+[Service]
+Type=forking
+PIDFile=%t/cc-watch/daemon.pid
+ExecStart=%h/go/bin/cc-watch --serve
+ExecStop=%h/go/bin/cc-watch --stop-server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now cc-watch
+```
+
+`Type=forking` is the right description: `--serve` starts the daemon and exits,
+leaving the child behind. `%t` expands to `$XDG_RUNTIME_DIR`, which is exactly
+where the pid file lands, so systemd tracks the daemon rather than the launcher.
+Adjust `%h/go/bin/cc-watch` if the binary lives elsewhere.
 
 ## Configuration
 
