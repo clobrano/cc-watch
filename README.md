@@ -1,6 +1,7 @@
 # cc-watch
 
-A terminal dashboard for Claude Code sessions running inside tmux.
+A terminal dashboard for coding-agent sessions running inside tmux. Claude Code
+and Gemini CLI are watched out of the box; other agents can be added.
 
 When you have several agents working in parallel across tmux windows and panes, it
 is hard to tell which one is still thinking, which one is waiting for your input,
@@ -21,11 +22,29 @@ lets you jump straight to the one that needs you.
 ## How it works
 
 Every 2 seconds `cc-watch` runs `tmux list-panes -a` to enumerate every pane in
-every session, keeps the ones whose current command matches a configured agent
-command (`claude` by default), and inspects each of them:
+every session, keeps the ones running a configured agent (`claude` and `gemini`
+by default), and inspects each of them:
 
 - the pane title, via `tmux display-message -p '#{pane_title}'`
 - the last 80 lines of output, via `tmux capture-pane -p`
+
+### Finding the agent behind an interpreter
+
+A pane's command is not always the agent's name. Claude Code renames its own
+process, so tmux reports `claude` and matching it is enough. Gemini CLI does
+not: its executable is a plain `#!/usr/bin/env node` script, so every Gemini
+pane shows up as `node`, and no `agent_commands` entry can ever match it.
+
+So when a pane's command is only an interpreter (`node`, `bun`, `deno`,
+`python`, …), cc-watch takes one `ps` snapshot per poll and walks the processes
+below that pane looking for one whose program names a configured agent — either
+as the executable itself (`.../bin/gemini`) or as the installed package it was
+exec'd from (`.../node_modules/@google/gemini-cli/dist/index.js`).
+
+Only the program is matched, never the rest of the command line, so a pane
+running `node server.js` from a directory named `gemini-experiments` is not
+mistaken for an agent. The snapshot is taken lazily: if every agent pane
+identifies itself by name, `ps` is never run at all.
 
 From those two signals it derives a state:
 
@@ -33,7 +52,7 @@ From those two signals it derives a state:
 | --------- | ------ | ---------------------------------------------------------------------------- |
 | `...`     | grey   | Pane seen for the first time; held until enough output has been observed to classify |
 | `running` | green  | The agent is working — a braille spinner in the pane title, or output still changing |
-| `waiting` | cyan   | The Claude Code prompt box is on screen and nothing has changed for 5 seconds |
+| `waiting` | cyan   | The agent's input box is on screen and nothing has changed for 5 seconds     |
 | `idle`    | yellow | Output has been unchanged for 5 seconds with no prompt box on screen          |
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
@@ -245,14 +264,14 @@ Configuration is optional. To override the defaults, create
 
 ```json
 {
-  "agent_commands": ["claude", "aider"],
+  "agent_commands": ["claude", "gemini", "aider"],
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
 
 | Key              | Default                              | Description                                                                                                                    |
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `agent_commands` | `["claude"]`                         | Pane commands (`#{pane_current_command}`) to treat as agents. Matched case-insensitively. Add entries to watch other agent CLIs. |
+| `agent_commands` | `["claude", "gemini"]`               | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Either key may be omitted; a missing or empty list falls back to its default. If

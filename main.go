@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +23,12 @@ const (
 	idleThreshold   = 5 * time.Second
 	paneLines       = 80
 
+	// promptTailLines is how many trailing non-empty lines are searched for the
+	// agent's input box. Both Claude Code and Gemini CLI draw a footer under the
+	// box — a shortcut hint, a cwd/model line — so the box is usually a few
+	// lines up rather than the last line of the pane.
+	promptTailLines = 5
+
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
 	statusOption = "@cc_watch_agents"
@@ -31,13 +38,15 @@ const (
 type Config struct {
 	// ShellPrompts are suffixes that identify a bare shell prompt line.
 	ShellPrompts []string `json:"shell_prompts"`
-	// AgentCommands are process names (#{pane_current_command}) to watch.
+	// AgentCommands are agent names to watch. A name is matched against the
+	// pane's command (#{pane_current_command}) and, when that command is only
+	// an interpreter, against the argv of the processes below the pane.
 	AgentCommands []string `json:"agent_commands"`
 }
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude"},
+	AgentCommands: []string{"claude", "gemini"},
 }
 
 func loadConfig() Config {
@@ -362,26 +371,45 @@ func update(ctx context.Context) {
 	// characters out of format output (3.4 rewrites a tab to '_'), so a tab
 	// delimiter yields one unsplittable field and no pane is ever matched.
 	// session_name comes last because it is the only field a user can put a
-	// '|' into — SplitN's 4-field limit then keeps such a name intact.
+	// '|' into — SplitN's 5-field limit then keeps such a name intact.
 	out, err := tmux(ctx, "list-panes", "-a", "-F",
-		"#{window_index}|#{pane_index}|#{pane_current_command}|#{session_name}")
+		"#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|#{session_name}")
 	if err != nil {
 		sessions = map[string]*session{}
 		return
 	}
 
 	seen := map[string]bool{}
+	// procs is taken lazily, at most once per poll, and only if some pane is
+	// running an interpreter: the all-"claude" case never pays for it.
+	var procs *procTable
+	procsScanned := false
+
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "|", 4)
-		if len(fields) != 4 {
+		fields := strings.SplitN(line, "|", 5)
+		if len(fields) != 5 {
 			continue
 		}
-		wIdx, pIdx, command, sname := fields[0], fields[1], fields[2], fields[3]
-		if !isAgentCommand(strings.TrimSpace(command)) {
-			continue
+		wIdx, pIdx, panePID, command, sname := fields[0], fields[1], fields[2], fields[3], fields[4]
+
+		command = strings.TrimSpace(command)
+		if agentForCommand(command) == "" {
+			// The pane command names no agent. It may still be one hiding behind
+			// its interpreter — Gemini CLI is a bare node script and always
+			// shows up as "node" — so look at what the pane is really running.
+			if !isInterpreter(command) {
+				continue
+			}
+			if !procsScanned {
+				procs, procsScanned = scanProcesses(ctx), true
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(panePID))
+			if err != nil || procs.agentInTree(pid) == "" {
+				continue
+			}
 		}
 
 		key := sname + ":" + wIdx + "." + pIdx // e.g. "notes:0.1"
@@ -433,15 +461,17 @@ func classify(pane, title string, lastChange time.Time) State {
 		return StateUnknown
 	}
 
-	tail := lastNonEmptyLine(trimmed)
+	// The shell prompt is checked first: an agent that has exited leaves its
+	// box on screen above the shell prompt that replaced it, and that pane is
+	// dead, not waiting.
 	switch {
-	case looksLikeClaudePrompt(tail):
+	case looksLikeShellPrompt(lastNonEmptyLine(trimmed)):
+		return StateError
+	case hasAgentPrompt(trimmed):
 		if time.Since(lastChange) >= idleThreshold {
 			return StateWaiting
 		}
 		return StateActive
-	case looksLikeShellPrompt(tail):
-		return StateError
 	default:
 		if time.Since(lastChange) >= idleThreshold {
 			return StateIdle
@@ -450,7 +480,27 @@ func classify(pane, title string, lastChange time.Time) State {
 	}
 }
 
-func looksLikeClaudePrompt(line string) bool {
+// hasAgentPrompt reports whether the agent's input box is on screen, by
+// looking at the last few non-empty lines rather than only the last one.
+func hasAgentPrompt(pane string) bool {
+	lines := strings.Split(pane, "\n")
+	for i, checked := len(lines)-1, 0; i >= 0 && checked < promptTailLines; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		checked++
+		if looksLikeAgentPrompt(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeAgentPrompt reports whether a line is part of an agent's input box.
+// Claude Code and Gemini CLI both draw one with the same rounded box-drawing
+// characters, so one test covers both.
+func looksLikeAgentPrompt(line string) bool {
 	if !strings.ContainsAny(line, "╭╮╰╯") {
 		return false
 	}
@@ -465,20 +515,11 @@ func looksLikeClaudePrompt(line string) bool {
 
 func looksLikeShellPrompt(line string) bool {
 	t := strings.TrimSpace(line)
-	if looksLikeClaudePrompt(t) {
+	if looksLikeAgentPrompt(t) {
 		return false
 	}
 	for _, suffix := range cfg.ShellPrompts {
 		if strings.HasSuffix(t, suffix) {
-			return true
-		}
-	}
-	return false
-}
-
-func isAgentCommand(cmd string) bool {
-	for _, ac := range cfg.AgentCommands {
-		if strings.EqualFold(cmd, ac) {
 			return true
 		}
 	}
