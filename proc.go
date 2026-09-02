@@ -7,34 +7,6 @@ import (
 	"strings"
 )
 
-// interpreterCommands are pane commands that say nothing about which agent is
-// running. An agent CLI shipped as a script is exec'd through its interpreter,
-// so tmux reports the interpreter's name unless the agent renames its own
-// process. Claude Code does rename itself and shows up as "claude"; Gemini CLI
-// does not, so every Gemini pane appears as "node" and no amount of
-// agent_commands tuning can match it. When a pane's command is one of these, we
-// look at the process tree below the pane for an argv that names an agent.
-var interpreterCommands = []string{
-	"node", "nodejs", "bun", "deno",
-	"npm", "npx", "pnpm", "yarn",
-	"uv", "uvx", "ruby", "perl",
-}
-
-// isInterpreter reports whether cmd is a runtime we should look behind.
-func isInterpreter(cmd string) bool {
-	c := strings.ToLower(strings.TrimSpace(cmd))
-	// python, python3, python3.13, … all count.
-	if strings.HasPrefix(c, "python") {
-		return true
-	}
-	for _, i := range interpreterCommands {
-		if c == i {
-			return true
-		}
-	}
-	return false
-}
-
 // agentForCommand returns the configured agent name a pane command matches, or
 // "" if it matches none.
 func agentForCommand(cmd string) string {
@@ -52,11 +24,14 @@ type procTable struct {
 	children map[int][]int
 }
 
-// scanProcesses takes one snapshot of every process and its parent. It is taken
-// at most once per poll, and only when some pane is running an interpreter, so
-// the common all-"claude" case costs nothing.
+// scanProcesses takes one snapshot of every process and its parent, so that a
+// pane whose command does not name an agent can still be identified by what is
+// running underneath it. It is taken at most once per poll.
 func scanProcesses(ctx context.Context) *procTable {
-	out, err := exec.CommandContext(ctx, "ps", "-eo", "pid=,ppid=,args=").Output()
+	// "ww" asks for the full argv. Without it ps truncates each line to the
+	// terminal width, which silently cuts the tail off exactly the long paths
+	// we need to read (".../node_modules/@google/gemini-cli/dist/index.js").
+	out, err := exec.CommandContext(ctx, "ps", "-ww", "-eo", "pid=,ppid=,args=").Output()
 	if err != nil {
 		return nil
 	}
@@ -97,12 +72,11 @@ func cutField(s string) (string, string) {
 // build tree, and the bound keeps a malformed table from costing a long walk.
 const maxProcDepth = 4
 
-// agentInTree walks the process subtree rooted at pid, breadth first, and
-// returns the first configured agent named by a process's argv — the agent the
-// pane is really running behind its interpreter.
-func (t *procTable) agentInTree(pid int) string {
+// walk visits the process subtree rooted at pid, breadth first and bounded by
+// maxProcDepth, calling fn for each process. fn returns false to stop the walk.
+func (t *procTable) walk(pid int, fn func(pid int) bool) {
 	if t == nil {
-		return ""
+		return
 	}
 	seen := map[int]bool{}
 	frontier := []int{pid}
@@ -113,14 +87,24 @@ func (t *procTable) agentInTree(pid int) string {
 				continue
 			}
 			seen[p] = true
-			if name := agentInArgs(t.args[p]); name != "" {
-				return name
+			if !fn(p) {
+				return
 			}
 			next = append(next, t.children[p]...)
 		}
 		frontier = next
 	}
-	return ""
+}
+
+// agentInTree returns the first configured agent named by a process below pid —
+// the agent a pane is really running, whatever tmux calls its command.
+func (t *procTable) agentInTree(pid int) string {
+	found := ""
+	t.walk(pid, func(p int) bool {
+		found = agentInArgs(t.args[p])
+		return found == ""
+	})
+	return found
 }
 
 // agentInArgs reports which configured agent an argv names, if any.

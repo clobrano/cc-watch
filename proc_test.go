@@ -2,19 +2,6 @@ package main
 
 import "testing"
 
-func TestIsInterpreter(t *testing.T) {
-	for _, cmd := range []string{"node", "NODE", "python3.13", "bun", "npx"} {
-		if !isInterpreter(cmd) {
-			t.Errorf("isInterpreter(%q) = false, want true", cmd)
-		}
-	}
-	for _, cmd := range []string{"claude", "bash", "zsh", "vim", "nodemon"} {
-		if isInterpreter(cmd) {
-			t.Errorf("isInterpreter(%q) = true, want false", cmd)
-		}
-	}
-}
-
 func TestAgentInArgs(t *testing.T) {
 	cfg = defaultConfig
 
@@ -95,5 +82,25 @@ func TestCutField(t *testing.T) {
 	// The argv keeps its spaces: it is the remainder, not a field.
 	if want := "node /bin/gemini --flag"; args != want {
 		t.Errorf("args = %q, want %q", args, want)
+	}
+}
+
+func TestParsePane(t *testing.T) {
+	// session_name comes last in the format precisely so a '|' in it survives.
+	p, ok := parsePane("2|1|4711|node|my|session")
+	if !ok {
+		t.Fatal("parsePane failed on a well-formed line")
+	}
+	if want := "my|session:2.1"; p.key != want {
+		t.Errorf("key = %q, want %q", p.key, want)
+	}
+	if p.command != "node" || p.pid != 4711 {
+		t.Errorf("command/pid = %q/%d, want %q/%d", p.command, p.pid, "node", 4711)
+	}
+	if _, ok := parsePane("2|1|node|session"); ok {
+		t.Error("parsePane accepted a short line")
+	}
+	if _, ok := parsePane("2|1|not-a-pid|node|session"); ok {
+		t.Error("parsePane accepted a non-numeric pid")
 	}
 }

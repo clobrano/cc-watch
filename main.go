@@ -29,6 +29,9 @@ const (
 	// lines up rather than the last line of the pane.
 	promptTailLines = 5
 
+	// paneFormat is the one list-panes query both the poller and --doctor use.
+	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|#{session_name}"
+
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
 	statusOption = "@cc_watch_agents"
@@ -49,12 +52,22 @@ var defaultConfig = Config{
 	AgentCommands: []string{"claude", "gemini"},
 }
 
-func loadConfig() Config {
+// configPath is the optional config file. It is empty if there is no home
+// directory to look in.
+func configPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "cc-watch", "config.json")
+}
+
+func loadConfig() Config {
+	path := configPath()
+	if path == "" {
 		return defaultConfig
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".config", "cc-watch", "config.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return defaultConfig
 	}
@@ -165,6 +178,8 @@ func main() {
 	serve := flag.Bool("serve", false,
 		"run in the background as a daemon, publishing only the tmux status strip (no dashboard)")
 	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
+	doctor := flag.Bool("doctor", false,
+		"report what cc-watch sees in every tmux pane, and why each was or was not taken for an agent")
 	flag.Parse()
 
 	if *serve && *stop {
@@ -175,6 +190,13 @@ func main() {
 	cfg = loadConfig()
 
 	switch {
+	case *doctor:
+		if err := runDoctor(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "cc-watch:", err)
+			os.Exit(1)
+		}
+		return
+
 	case *stop:
 		if err := stopServer(); err != nil {
 			fmt.Fprintln(os.Stderr, "cc-watch:", err)
@@ -372,16 +394,15 @@ func update(ctx context.Context) {
 	// delimiter yields one unsplittable field and no pane is ever matched.
 	// session_name comes last because it is the only field a user can put a
 	// '|' into — SplitN's 5-field limit then keeps such a name intact.
-	out, err := tmux(ctx, "list-panes", "-a", "-F",
-		"#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|#{session_name}")
+	out, err := tmux(ctx, "list-panes", "-a", "-F", paneFormat)
 	if err != nil {
 		sessions = map[string]*session{}
 		return
 	}
 
 	seen := map[string]bool{}
-	// procs is taken lazily, at most once per poll, and only if some pane is
-	// running an interpreter: the all-"claude" case never pays for it.
+	// procs is taken lazily, at most once per poll, and only once some pane has
+	// failed to name its agent: a screen of self-naming agents never pays for it.
 	var procs *procTable
 	procsScanned := false
 
@@ -395,14 +416,11 @@ func update(ctx context.Context) {
 		}
 		wIdx, pIdx, panePID, command, sname := fields[0], fields[1], fields[2], fields[3], fields[4]
 
-		command = strings.TrimSpace(command)
-		if agentForCommand(command) == "" {
-			// The pane command names no agent. It may still be one hiding behind
-			// its interpreter — Gemini CLI is a bare node script and always
-			// shows up as "node" — so look at what the pane is really running.
-			if !isInterpreter(command) {
-				continue
-			}
+		if agentForCommand(strings.TrimSpace(command)) == "" {
+			// The pane command names no agent, but it may still be running one:
+			// tmux reports whatever the foreground process calls itself, which
+			// for Gemini CLI is "node" and for an agent behind a wrapper is the
+			// wrapper. Ask the process tree instead of trusting the name.
 			if !procsScanned {
 				procs, procsScanned = scanProcesses(ctx), true
 			}

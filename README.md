@@ -28,23 +28,24 @@ by default), and inspects each of them:
 - the pane title, via `tmux display-message -p '#{pane_title}'`
 - the last 80 lines of output, via `tmux capture-pane -p`
 
-### Finding the agent behind an interpreter
+### Finding the agent behind its process name
 
 A pane's command is not always the agent's name. Claude Code renames its own
 process, so tmux reports `claude` and matching it is enough. Gemini CLI does
 not: its executable is a plain `#!/usr/bin/env node` script, so every Gemini
-pane shows up as `node`, and no `agent_commands` entry can ever match it.
+pane shows up as `node` — and behind a wrapper script, a pane can report the
+wrapper or the shell instead. No `agent_commands` entry can match any of those.
 
-So when a pane's command is only an interpreter (`node`, `bun`, `deno`,
-`python`, …), cc-watch takes one `ps` snapshot per poll and walks the processes
-below that pane looking for one whose program names a configured agent — either
-as the executable itself (`.../bin/gemini`) or as the installed package it was
-exec'd from (`.../node_modules/@google/gemini-cli/dist/index.js`).
+So when a pane's command names no agent, cc-watch takes one `ps` snapshot per
+poll and walks the processes below that pane, looking for one whose program
+names a configured agent — either as the executable itself (`.../bin/gemini`)
+or as the installed package it was exec'd from
+(`.../node_modules/@google/gemini-cli/dist/index.js`).
 
 Only the program is matched, never the rest of the command line, so a pane
 running `node server.js` from a directory named `gemini-experiments` is not
-mistaken for an agent. The snapshot is taken lazily: if every agent pane
-identifies itself by name, `ps` is never run at all.
+mistaken for an agent. The snapshot is lazy — panes that name their own agent
+never trigger it — and taken at most once per poll.
 
 From those two signals it derives a state:
 
@@ -113,6 +114,7 @@ adapts to terminal resizes.
 | _(none)_        | Run the interactive dashboard                                           |
 | `--serve`       | Start the background daemon: [tmux status bar](#tmux-status-bar) only, no dashboard |
 | `--stop-server` | Stop the running daemon                                                 |
+| `--doctor`      | Report what cc-watch sees in every pane, then exit — see [Troubleshooting](#troubleshooting) |
 
 ## tmux status bar
 
@@ -256,6 +258,47 @@ systemctl --user enable --now cc-watch
 leaving the child behind. `%t` expands to `$XDG_RUNTIME_DIR`, which is exactly
 where the pid file lands, so systemd tracks the daemon rather than the launcher.
 Adjust `%h/go/bin/cc-watch` if the binary lives elsewhere.
+
+## Troubleshooting
+
+### An agent does not show up
+
+Run `cc-watch --doctor`. It lists every tmux pane with the command tmux reports
+for it and the agent cc-watch resolved, and for each pane it did *not* recognise
+it prints the processes running underneath — so the program that should have
+been matched can be read straight off:
+
+```
+$ cc-watch --doctor
+cc-watch doctor
+
+config:  /home/u/.config/cc-watch/config.json (absent) — built-in defaults
+agents:  claude, gemini
+
+PANE                      COMMAND         PID       AGENT
+------------------------------------------------------------------------
+work:0.0                  node            1855      gemini (process tree)
+work:1.0                  claude          1864      claude (pane command)
+work:2.0                  node            1874      -
+
+1 pane(s) recognised as agents.
+
+Processes under the panes that were not recognised. ...
+
+  work:2.0 (node):
+    1874     -bash
+    2301     node /home/u/app/server.js
+```
+
+The two usual causes:
+
+- **A config file from before the agent was supported.** `agent_commands`
+  *replaces* the defaults rather than adding to them, so a file listing only
+  `["claude"]` keeps Gemini panes out no matter what. `--doctor` prints the file
+  in force and the agents it yields, and warns when `gemini` is missing.
+- **An install layout that is not matched.** If the doctor shows the agent's
+  process under an unrecognised pane but does not name it, its path is one
+  cc-watch does not know: open an issue with that line.
 
 ## Configuration
 
