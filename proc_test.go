@@ -13,6 +13,8 @@ func TestAgentInArgs(t *testing.T) {
 		{"node /home/u/.npm-global/bin/gemini", "gemini"},
 		{"node /usr/lib/node_modules/@google/gemini-cli/dist/index.js", "gemini"},
 		{"/opt/node/bin/node --max-old-space-size=4096 /usr/local/bin/gemini", "gemini"},
+		// The script is not always the first argument after the interpreter.
+		{"node --import /etc/setup.js /usr/local/bin/gemini", "gemini"},
 		{"node /home/u/.local/bin/claude", "claude"},
 		{"node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js", "claude"},
 		// Not agents: the name only appears in a later argument, in a directory

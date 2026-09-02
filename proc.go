@@ -109,18 +109,16 @@ func (t *procTable) agentInTree(pid int) string {
 
 // agentInArgs reports which configured agent an argv names, if any.
 //
-// Only the program is inspected — the first two non-flag arguments, i.e. the
-// interpreter and the script it was handed — so a session that merely mentions
-// an agent in a later argument ("node build.js gemini.json") is not mistaken
-// for one.
+// Every non-flag argument is checked, not just the first couple: a node
+// invocation can carry arguments of its own before the script ("node --import
+// ./setup.js /usr/local/bin/gemini"), and guessing which position the program
+// occupies is how an agent goes unseen. The precision lives in agentInPath,
+// which only accepts an argument that is an agent executable or an installed
+// agent package — never one that merely mentions an agent's name.
 func agentInArgs(args string) string {
-	checked := 0
 	for _, field := range strings.Fields(args) {
 		if strings.HasPrefix(field, "-") {
-			continue // a flag, not the program
-		}
-		if checked++; checked > 2 {
-			return ""
+			continue // a flag, not a program path
 		}
 		if name := agentInPath(field); name != "" {
 			return name

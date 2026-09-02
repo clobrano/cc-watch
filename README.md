@@ -42,10 +42,11 @@ names a configured agent — either as the executable itself (`.../bin/gemini`)
 or as the installed package it was exec'd from
 (`.../node_modules/@google/gemini-cli/dist/index.js`).
 
-Only the program is matched, never the rest of the command line, so a pane
-running `node server.js` from a directory named `gemini-experiments` is not
-mistaken for an agent. The snapshot is lazy — panes that name their own agent
-never trigger it — and taken at most once per poll.
+An argument only counts if it is an agent's executable or an installed agent
+package, so a pane running `node server.js` from a directory named
+`gemini-experiments`, or passing a `gemini.json` config, is not mistaken for an
+agent. The snapshot is lazy — panes that name their own agent never trigger it —
+and taken at most once per poll.
 
 From those two signals it derives a state:
 
