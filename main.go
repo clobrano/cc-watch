@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"golang.org/x/term"
 )
 
@@ -22,12 +24,21 @@ const (
 	idleThreshold   = 5 * time.Second
 	paneLines       = 80
 
+	// promptTailLines is how many trailing non-empty lines are searched for the
+	// agent's input box. Both Claude Code and Gemini CLI draw a footer under the
+	// box — a shortcut hint, a cwd/model line — so the box is usually a few
+	// lines up rather than the last line of the pane.
+	promptTailLines = 5
+
 	// promptScrollback is how deep the one-off capture goes when a pane is first
 	// seen, looking for the prompt that started the turn. A pane that has been
 	// working for a while has pushed it well past the paneLines window, and
 	// without this an agent already running when cc-watch starts shows no prompt
 	// until the user types the next one.
 	promptScrollback = 400
+
+	// paneFormat is the one list-panes query both the poller and --doctor use.
+	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|#{session_name}"
 
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
@@ -38,21 +49,79 @@ const (
 type Config struct {
 	// ShellPrompts are suffixes that identify a bare shell prompt line.
 	ShellPrompts []string `json:"shell_prompts"`
-	// AgentCommands are process names (#{pane_current_command}) to watch.
+	// AgentCommands are agent names to watch. A name is matched against the
+	// pane's command (#{pane_current_command}) and, when that command is only
+	// an interpreter, against the argv of the processes below the pane.
 	AgentCommands []string `json:"agent_commands"`
+	// AgentIcons overrides the glyph shown before a session name, per agent.
+	// Unlike agent_commands this is merged over the built-in icons rather than
+	// replacing them, so naming one agent leaves the others alone. It is also
+	// the escape hatch for a terminal that renders the defaults at double
+	// width: give the agent an ASCII icon such as "c".
+	AgentIcons map[string]string `json:"agent_icons"`
+}
+
+// defaultAgentIcons are the marks the agents are known by: Claude Code prints
+// U+273B itself, and U+2726 is the four-pointed star of the Gemini mark.
+//
+// Both are deliberate choices. Each is East-Asian-width Neutral and has no
+// emoji presentation, so terminals draw them one column wide. The obvious
+// alternatives do not: U+2728 SPARKLES is Wide, U+2733 EIGHT SPOKED ASTERISK
+// has an emoji form a terminal may draw at double width, and the ambiguous
+// width of the triangles is what kept ">" as the selection pointer.
+var defaultAgentIcons = map[string]string{
+	"claude": "✻",
+	"gemini": "✦",
+}
+
+// agentIcon is the glyph for an agent: configured, else built in, else the
+// agent's initial, which is always one column and tells two custom agents
+// apart without any configuration at all.
+func agentIcon(agent string) string {
+	if icon, ok := lookupFold(cfg.AgentIcons, agent); ok {
+		return icon
+	}
+	if icon, ok := lookupFold(defaultAgentIcons, agent); ok {
+		return icon
+	}
+	for _, r := range agent {
+		return string(unicode.ToUpper(r))
+	}
+	return " "
+}
+
+// lookupFold reads m by case-insensitive key, matching how agent names are
+// compared everywhere else.
+func lookupFold(m map[string]string, key string) (string, bool) {
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude"},
+	AgentCommands: []string{"claude", "gemini"},
+}
+
+// configPath is the optional config file. It is empty if there is no home
+// directory to look in.
+func configPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "cc-watch", "config.json")
 }
 
 func loadConfig() Config {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	path := configPath()
+	if path == "" {
 		return defaultConfig
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".config", "cc-watch", "config.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return defaultConfig
 	}
@@ -139,6 +208,7 @@ var (
 
 type session struct {
 	name       string
+	agent      string // which configured agent this pane is running
 	state      State
 	desc       string
 	prompt     string
@@ -164,6 +234,8 @@ func main() {
 	serve := flag.Bool("serve", false,
 		"run in the background as a daemon, publishing only the tmux status strip (no dashboard)")
 	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
+	doctor := flag.Bool("doctor", false,
+		"report what cc-watch sees in every tmux pane, and why each was or was not taken for an agent")
 	flag.Parse()
 
 	if *serve && *stop {
@@ -174,6 +246,13 @@ func main() {
 	cfg = loadConfig()
 
 	switch {
+	case *doctor:
+		if err := runDoctor(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "cc-watch:", err)
+			os.Exit(1)
+		}
+		return
+
 	case *stop:
 		if err := stopServer(); err != nil {
 			fmt.Fprintln(os.Stderr, "cc-watch:", err)
@@ -370,26 +449,45 @@ func update(ctx context.Context) {
 	// characters out of format output (3.4 rewrites a tab to '_'), so a tab
 	// delimiter yields one unsplittable field and no pane is ever matched.
 	// session_name comes last because it is the only field a user can put a
-	// '|' into — SplitN's 4-field limit then keeps such a name intact.
-	out, err := tmux(ctx, "list-panes", "-a", "-F",
-		"#{window_index}|#{pane_index}|#{pane_current_command}|#{session_name}")
+	// '|' into — SplitN's 5-field limit then keeps such a name intact.
+	out, err := tmux(ctx, "list-panes", "-a", "-F", paneFormat)
 	if err != nil {
 		sessions = map[string]*session{}
 		return
 	}
 
 	seen := map[string]bool{}
+	// procs is taken lazily, at most once per poll, and only once some pane has
+	// failed to name its agent: a screen of self-naming agents never pays for it.
+	var procs *procTable
+	procsScanned := false
+
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "|", 4)
-		if len(fields) != 4 {
+		fields := strings.SplitN(line, "|", 5)
+		if len(fields) != 5 {
 			continue
 		}
-		wIdx, pIdx, command, sname := fields[0], fields[1], fields[2], fields[3]
-		if !isAgentCommand(strings.TrimSpace(command)) {
-			continue
+		wIdx, pIdx, panePID, command, sname := fields[0], fields[1], fields[2], fields[3], fields[4]
+
+		agent := agentForCommand(strings.TrimSpace(command))
+		if agent == "" {
+			// The pane command names no agent, but it may still be running one:
+			// tmux reports whatever the foreground process calls itself, which
+			// for Gemini CLI is "node" and for an agent behind a wrapper is the
+			// wrapper. Ask the process tree instead of trusting the name.
+			if !procsScanned {
+				procs, procsScanned = scanProcesses(ctx), true
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(panePID))
+			if err != nil {
+				continue
+			}
+			if agent = procs.agentInTree(pid); agent == "" {
+				continue
+			}
 		}
 
 		key := sname + ":" + wIdx + "." + pIdx // e.g. "notes:0.1"
@@ -399,7 +497,7 @@ func update(ctx context.Context) {
 		s, ok := sessions[key]
 		if !ok {
 			pane, _ := capture(ctx, target, paneLines)
-			s = &session{name: key, lastChange: time.Now(), state: StateStarting, lastPane: pane}
+			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting, lastPane: pane}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
 			// newer one.
@@ -409,6 +507,7 @@ func update(ctx context.Context) {
 			sessions[key] = s
 			continue
 		}
+		s.agent = agent
 
 		// Hold "..." until we have observed the pane for at least idleThreshold.
 		if s.state == StateStarting && time.Since(s.lastChange) < idleThreshold {
@@ -453,15 +552,17 @@ func classify(pane, title string, lastChange time.Time) State {
 		return StateUnknown
 	}
 
-	tail := lastNonEmptyLine(trimmed)
+	// The shell prompt is checked first: an agent that has exited leaves its
+	// box on screen above the shell prompt that replaced it, and that pane is
+	// dead, not waiting.
 	switch {
-	case looksLikeClaudePrompt(tail):
+	case looksLikeShellPrompt(lastNonEmptyLine(trimmed)):
+		return StateError
+	case hasAgentPrompt(trimmed):
 		if time.Since(lastChange) >= idleThreshold {
 			return StateWaiting
 		}
 		return StateActive
-	case looksLikeShellPrompt(tail):
-		return StateError
 	default:
 		if time.Since(lastChange) >= idleThreshold {
 			return StateIdle
@@ -470,7 +571,27 @@ func classify(pane, title string, lastChange time.Time) State {
 	}
 }
 
-func looksLikeClaudePrompt(line string) bool {
+// hasAgentPrompt reports whether the agent's input box is on screen, by
+// looking at the last few non-empty lines rather than only the last one.
+func hasAgentPrompt(pane string) bool {
+	lines := strings.Split(pane, "\n")
+	for i, checked := len(lines)-1, 0; i >= 0 && checked < promptTailLines; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		checked++
+		if looksLikeAgentPrompt(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeAgentPrompt reports whether a line is part of an agent's input box.
+// Claude Code and Gemini CLI both draw one with the same rounded box-drawing
+// characters, so one test covers both.
+func looksLikeAgentPrompt(line string) bool {
 	if !strings.ContainsAny(line, "╭╮╰╯") {
 		return false
 	}
@@ -485,20 +606,11 @@ func looksLikeClaudePrompt(line string) bool {
 
 func looksLikeShellPrompt(line string) bool {
 	t := strings.TrimSpace(line)
-	if looksLikeClaudePrompt(t) {
+	if looksLikeAgentPrompt(t) {
 		return false
 	}
 	for _, suffix := range cfg.ShellPrompts {
 		if strings.HasSuffix(t, suffix) {
-			return true
-		}
-	}
-	return false
-}
-
-func isAgentCommand(cmd string) bool {
-	for _, ac := range cfg.AgentCommands {
-		if strings.EqualFold(cmd, ac) {
 			return true
 		}
 	}
@@ -624,11 +736,18 @@ func toDisplay(s string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// layout constants: chars consumed before the description column.
-// "  " (2) + "> " (2) + name (24) + "  " (2) + state (9) + "  " (2) = 41
+// Column widths for the dashboard. prefixWidth is everything consumed before
+// the description column, derived from the others so that adding or resizing a
+// column cannot leave the description misaligned.
+//
 // Using ASCII ">" for the pointer — unicode triangles render as 2-column wide
 // glyphs in most terminals, which breaks column alignment.
-const prefixWidth = 41
+const (
+	nameWidth   = 24
+	stateWidth  = 9
+	gap         = 2
+	prefixWidth = 2 + 2 + nameWidth + gap + stateWidth + gap
+)
 
 func render(selected int) {
 	const (
@@ -654,7 +773,8 @@ func render(selected int) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
 	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
-	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST PROMPT", reset)
+	fmt.Fprintf(&b, "    %s%-*s  %-*s  %s%s\n", bold,
+		nameWidth, "SESSION", stateWidth, "STATE", "LAST PROMPT", reset)
 	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
@@ -675,6 +795,9 @@ func render(selected int) {
 			if sessionCount[sname] > 1 {
 				displayName = key
 			}
+			// The icon rides inside the session column rather than taking a
+			// column of its own, which would cost the prompt column ten chars.
+			displayName = agentIcon(s.agent) + " " + displayName
 
 			pointer := "  "
 			nameStyle := dim
@@ -690,10 +813,10 @@ func render(selected int) {
 				text = s.desc
 			}
 			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
-			fmt.Fprintf(&b, "  %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
+			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%s%s\n",
 				pointer,
-				nameStyle, truncate(displayName, 24), reset,
-				s.state.color(), s.state.label(), reset,
+				nameStyle, nameWidth, truncate(displayName, nameWidth), reset,
+				s.state.color(), stateWidth, s.state.label(), reset,
 				dim, truncate(text, descWidth), reset,
 			)
 		}
@@ -764,8 +887,9 @@ func sortedNames() []string {
 }
 
 // truncate cuts to n columns, counting runes rather than bytes: prompt text can
-// carry multi-byte characters, and slicing those by byte both overcounts the
-// width and can split a rune into garbage.
+// carry multi-byte characters and every session name is prefixed with a
+// three-byte agent icon, so slicing by byte would both overcount the width and
+// split a rune into garbage.
 func truncate(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {

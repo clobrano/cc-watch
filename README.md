@@ -1,6 +1,7 @@
 # cc-watch
 
-A terminal dashboard for Claude Code sessions running inside tmux.
+A terminal dashboard for coding-agent sessions running inside tmux. Claude Code
+and Gemini CLI are watched out of the box; other agents can be added.
 
 When you have several agents working in parallel across tmux windows and panes, it
 is hard to tell which one is still thinking, which one is waiting for your input,
@@ -12,20 +13,40 @@ lets you jump straight to the one that needs you.
 
     SESSION                   STATE      LAST PROMPT
     ──────────────────────────────────────────────────────────────────────────
-    notes                     running    rewrite the parser to accept trailing...
-  > api:0.1                   waiting    add rate limiting to the /search endpoint
-    api:1.0                   idle       why is the integration suite flaky?
-    scratch                   error      $
+    ✻ notes                   running    rewrite the parser to accept trailing...
+  > ✦ api:0.1                 waiting    add rate limiting to the /search endpoint
+    ✻ api:1.0                 idle       why is the integration suite flaky?
+    ✦ scratch                 error      $
 ```
 
 ## How it works
 
 Every 2 seconds `cc-watch` runs `tmux list-panes -a` to enumerate every pane in
-every session, keeps the ones whose current command matches a configured agent
-command (`claude` by default), and inspects each of them:
+every session, keeps the ones running a configured agent (`claude` and `gemini`
+by default), and inspects each of them:
 
 - the pane title, via `tmux display-message -p '#{pane_title}'`
 - the last 80 lines of output, via `tmux capture-pane -p`
+
+### Finding the agent behind its process name
+
+A pane's command is not always the agent's name. Claude Code renames its own
+process, so tmux reports `claude` and matching it is enough. Gemini CLI does
+not: its executable is a plain `#!/usr/bin/env node` script, so every Gemini
+pane shows up as `node` — and behind a wrapper script, a pane can report the
+wrapper or the shell instead. No `agent_commands` entry can match any of those.
+
+So when a pane's command names no agent, cc-watch takes one `ps` snapshot per
+poll and walks the processes below that pane, looking for one whose program
+names a configured agent — either as the executable itself (`.../bin/gemini`)
+or as the installed package it was exec'd from
+(`.../node_modules/@google/gemini-cli/dist/index.js`).
+
+An argument only counts if it is an agent's executable or an installed agent
+package, so a pane running `node server.js` from a directory named
+`gemini-experiments`, or passing a `gemini.json` config, is not mistaken for an
+agent. The snapshot is lazy — panes that name their own agent never trigger it —
+and taken at most once per poll.
 
 From those two signals it derives a state:
 
@@ -33,10 +54,24 @@ From those two signals it derives a state:
 | --------- | ------ | ---------------------------------------------------------------------------- |
 | `...`     | grey   | Pane seen for the first time; held until enough output has been observed to classify |
 | `running` | green  | The agent is working — a braille spinner in the pane title, or output still changing |
-| `waiting` | cyan   | The Claude Code prompt box is on screen and nothing has changed for 5 seconds. **Known not to fire against the newer borderless Claude Code UI**, which draws no box for the detector to find; such panes read `idle` instead |
+| `waiting` | cyan   | The agent's input box is on screen and nothing has changed for 5 seconds. **Known not to fire against the newer borderless Claude Code UI**, which draws no box for the detector to find; such panes read `idle` instead. Gemini CLI draws a box and is detected |
 | `idle`    | yellow | Output has been unchanged for 5 seconds with no prompt box on screen          |
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
+
+Each row is marked with the agent running in it — `✻` for Claude Code, `✦` for
+Gemini CLI — so a screen of mixed sessions stays readable. The mark sits inside
+the session column rather than taking a column of its own, so it costs the
+`LAST PROMPT` text nothing. An agent with no icon of its own is marked with its
+initial, and `agent_icons` overrides any of them.
+
+Both default glyphs are one terminal column wide and carry no emoji
+presentation, so they do not disturb the column alignment. If yours renders
+them at double width, set an ASCII icon:
+
+```json
+{ "agent_icons": { "claude": "c", "gemini": "g" } }
+```
 
 The `LAST PROMPT` column shows the last thing **you** asked that agent to do. A
 pane's tail tells you little — mid-turn it is a spinner, and at rest it is the
@@ -120,6 +155,7 @@ adapts to terminal resizes.
 | _(none)_        | Run the interactive dashboard                                           |
 | `--serve`       | Start the background daemon: [tmux status bar](#tmux-status-bar) only, no dashboard |
 | `--stop-server` | Stop the running daemon                                                 |
+| `--doctor`      | Report what cc-watch sees in every pane, then exit — see [Troubleshooting](#troubleshooting) |
 
 ## tmux status bar
 
@@ -264,6 +300,47 @@ leaving the child behind. `%t` expands to `$XDG_RUNTIME_DIR`, which is exactly
 where the pid file lands, so systemd tracks the daemon rather than the launcher.
 Adjust `%h/go/bin/cc-watch` if the binary lives elsewhere.
 
+## Troubleshooting
+
+### An agent does not show up
+
+Run `cc-watch --doctor`. It lists every tmux pane with the command tmux reports
+for it and the agent cc-watch resolved, and for each pane it did *not* recognise
+it prints the processes running underneath — so the program that should have
+been matched can be read straight off:
+
+```
+$ cc-watch --doctor
+cc-watch doctor
+
+config:  /home/u/.config/cc-watch/config.json (absent) — built-in defaults
+agents:  claude, gemini
+
+PANE                      COMMAND         PID       AGENT
+------------------------------------------------------------------------
+work:0.0                  node            1855      gemini (process tree)
+work:1.0                  claude          1864      claude (pane command)
+work:2.0                  node            1874      -
+
+1 pane(s) recognised as agents.
+
+Processes under the panes that were not recognised. ...
+
+  work:2.0 (node):
+    1874     -bash
+    2301     node /home/u/app/server.js
+```
+
+The two usual causes:
+
+- **A config file from before the agent was supported.** `agent_commands`
+  *replaces* the defaults rather than adding to them, so a file listing only
+  `["claude"]` keeps Gemini panes out no matter what. `--doctor` prints the file
+  in force and the agents it yields, and warns when `gemini` is missing.
+- **An install layout that is not matched.** If the doctor shows the agent's
+  process under an unrecognised pane but does not name it, its path is one
+  cc-watch does not know: open an issue with that line.
+
 ## Configuration
 
 Configuration is optional. To override the defaults, create
@@ -271,17 +348,19 @@ Configuration is optional. To override the defaults, create
 
 ```json
 {
-  "agent_commands": ["claude", "aider"],
+  "agent_commands": ["claude", "gemini", "aider"],
+  "agent_icons": { "aider": "a" },
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
 
 | Key              | Default                              | Description                                                                                                                    |
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `agent_commands` | `["claude"]`                         | Pane commands (`#{pane_current_command}`) to treat as agents. Matched case-insensitively. Add entries to watch other agent CLIs. |
+| `agent_commands` | `["claude", "gemini"]`               | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
+| `agent_icons`    | `{"claude": "✻", "gemini": "✦"}`     | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
-Either key may be omitted; a missing or empty list falls back to its default. If
+Any key may be omitted; a missing or empty list falls back to its default. If
 the file is absent or cannot be parsed, all defaults are used.
 
 ## Tuning
