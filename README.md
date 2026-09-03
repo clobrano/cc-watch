@@ -11,12 +11,12 @@ lets you jump straight to the one that needs you.
 ```
   cc-watch  15:04:05
 
-    SESSION                   STATE      LAST OUTPUT
+    SESSION                   AGENT     STATE      LAST OUTPUT
     ─────────────────────────────────────────────────────────────────────
-    notes                     running    Editing src/parser.go
-  > api:0.1                   waiting    Do you want to make this edit?
-    api:1.0                   idle       Done. Tests pass.
-    scratch                   error      $
+    notes                     claude    running    Editing src/parser.go
+  > api:0.1                   gemini    waiting    Do you want to make this edit?
+    api:1.0                   claude    idle       Done. Tests pass.
+    scratch                   gemini    error      $
 ```
 
 ## How it works
@@ -58,6 +58,11 @@ From those two signals it derives a state:
 | `idle`    | yellow | Output has been unchanged for 5 seconds with no prompt box on screen          |
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
+
+The `AGENT` column names which agent the pane is running, so a screen of mixed
+Claude Code and Gemini CLI sessions stays readable. It is the configured name
+that matched, whether that came from the pane's command or from the process
+tree underneath it.
 
 The `LAST OUTPUT` column shows the last non-decorative line of the pane, with ANSI
 escapes and box-drawing characters stripped, so you can see what each agent is

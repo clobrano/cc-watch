@@ -154,6 +154,7 @@ var (
 
 type session struct {
 	name       string
+	agent      string // which configured agent this pane is running
 	state      State
 	desc       string
 	lastChange time.Time
@@ -416,7 +417,8 @@ func update(ctx context.Context) {
 		}
 		wIdx, pIdx, panePID, command, sname := fields[0], fields[1], fields[2], fields[3], fields[4]
 
-		if agentForCommand(strings.TrimSpace(command)) == "" {
+		agent := agentForCommand(strings.TrimSpace(command))
+		if agent == "" {
 			// The pane command names no agent, but it may still be running one:
 			// tmux reports whatever the foreground process calls itself, which
 			// for Gemini CLI is "node" and for an agent behind a wrapper is the
@@ -425,7 +427,10 @@ func update(ctx context.Context) {
 				procs, procsScanned = scanProcesses(ctx), true
 			}
 			pid, err := strconv.Atoi(strings.TrimSpace(panePID))
-			if err != nil || procs.agentInTree(pid) == "" {
+			if err != nil {
+				continue
+			}
+			if agent = procs.agentInTree(pid); agent == "" {
 				continue
 			}
 		}
@@ -437,10 +442,11 @@ func update(ctx context.Context) {
 		s, ok := sessions[key]
 		if !ok {
 			pane, _ := tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", paneLines))
-			s = &session{name: key, lastChange: time.Now(), state: StateStarting, lastPane: pane}
+			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting, lastPane: pane}
 			sessions[key] = s
 			continue
 		}
+		s.agent = agent
 
 		// Hold "..." until we have observed the pane for at least idleThreshold.
 		if s.state == StateStarting && time.Since(s.lastChange) < idleThreshold {
@@ -569,11 +575,19 @@ func toASCII(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// layout constants: chars consumed before the description column.
-// "  " (2) + "> " (2) + name (24) + "  " (2) + state (9) + "  " (2) = 41
+// Column widths for the dashboard. prefixWidth is everything consumed before
+// the description column, derived from the others so that adding or resizing a
+// column cannot leave the description misaligned.
+//
 // Using ASCII ">" for the pointer — unicode triangles render as 2-column wide
 // glyphs in most terminals, which breaks column alignment.
-const prefixWidth = 41
+const (
+	nameWidth   = 24
+	agentWidth  = 8
+	stateWidth  = 9
+	gap         = 2
+	prefixWidth = 2 + 2 + nameWidth + gap + agentWidth + gap + stateWidth + gap
+)
 
 func render(selected int) {
 	const (
@@ -599,7 +613,8 @@ func render(selected int) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
 	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
-	fmt.Fprintf(&b, "    %s%-24s  %-9s  %s%s\n", bold, "SESSION", "STATE", "LAST OUTPUT", reset)
+	fmt.Fprintf(&b, "    %s%-*s  %-*s  %-*s  %s%s\n", bold,
+		nameWidth, "SESSION", agentWidth, "AGENT", stateWidth, "STATE", "LAST OUTPUT", reset)
 	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
@@ -628,10 +643,11 @@ func render(selected int) {
 				nameStyle = reset
 			}
 			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
-			fmt.Fprintf(&b, "  %s%s%-24s%s  %s%-9s%s  %s%s%s\n",
+			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%-*s%s  %s%s%s\n",
 				pointer,
-				nameStyle, truncate(displayName, 24), reset,
-				s.state.color(), s.state.label(), reset,
+				nameStyle, nameWidth, truncate(displayName, nameWidth), reset,
+				dim, agentWidth, truncate(s.agent, agentWidth), reset,
+				s.state.color(), stateWidth, s.state.label(), reset,
 				dim, truncate(s.desc, descWidth), reset,
 			)
 		}
