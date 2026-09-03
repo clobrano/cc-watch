@@ -17,10 +17,17 @@ func TestAgentInArgs(t *testing.T) {
 		{"node --import /etc/setup.js /usr/local/bin/gemini", "gemini"},
 		{"node /home/u/.local/bin/claude", "claude"},
 		{"node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js", "claude"},
+		// Codex: the npm shim, the native binary it spawns out of the platform
+		// package, and a standalone install that renames nothing.
+		{"node /usr/lib/node_modules/@openai/codex/bin/codex.js", "codex"},
+		{"/usr/lib/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex", "codex"},
+		{"/home/u/.local/bin/codex --model gpt-5", "codex"},
 		// Not agents: the name only appears in a later argument, in a directory
 		// the program happens to live under, or not at all.
 		{"node build.js gemini.json", ""},
 		{"node /home/u/gemini-experiments/server.js", ""},
+		{"node /home/u/codex-experiments/server.js", ""},
+		{"node build.js codex.json", ""},
 		{"node /tmp/claude-0/scratch/server.js", ""},
 		{"node /srv/app/server.js", ""},
 		{"python3 train.py --config gemini.yaml", ""},
@@ -38,18 +45,26 @@ func TestAgentInArgs(t *testing.T) {
 func TestAgentInTree(t *testing.T) {
 	cfg = defaultConfig
 
-	// pane shell (100) -> wrapper (200) -> node running gemini (300)
+	// pane shell (100) -> wrapper (200) -> node running gemini (300), and a
+	// second pane shell (500) -> the Codex npm shim (600) -> the native binary
+	// it spawns (700), which is two steps below the pane either way.
 	tbl := &procTable{
 		args: map[int]string{
 			100: "-bash",
 			200: "/bin/sh /usr/local/bin/start-agent",
 			300: "node /usr/lib/node_modules/@google/gemini-cli/dist/index.js",
 			400: "node /srv/app/server.js",
+			500: "-zsh",
+			600: "node /usr/lib/node_modules/@openai/codex/bin/codex.js",
+			700: "/usr/lib/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
 		},
-		children: map[int][]int{100: {200}, 200: {300}},
+		children: map[int][]int{100: {200}, 200: {300}, 500: {600}, 600: {700}},
 	}
 	if got := tbl.agentInTree(100); got != "gemini" {
 		t.Errorf("agentInTree(100) = %q, want %q", got, "gemini")
+	}
+	if got := tbl.agentInTree(500); got != "codex" {
+		t.Errorf("agentInTree(500) = %q, want %q", got, "codex")
 	}
 	if got := tbl.agentInTree(400); got != "" {
 		t.Errorf("agentInTree(400) = %q, want %q", got, "")

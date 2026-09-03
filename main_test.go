@@ -72,6 +72,11 @@ func TestExtractPrompt(t *testing.T) {
 			want: "second thing",
 		},
 		{
+			name: "reads a Codex prompt and its wrapped continuation",
+			pane: codexPane,
+			want: "rewrite the retry loop and add a test for the 429 case, then update the README",
+		},
+		{
 			name: "reads a chevron prompt in the borderless UI",
 			pane: borderlessPane,
 			want: "it looks great, commit and push",
@@ -126,6 +131,15 @@ func TestExtractDescSkipsTheModeHintFooter(t *testing.T) {
 func TestExtractDescSkipsTheFooterInTheBorderlessUI(t *testing.T) {
 	want := "Brewed for 49m 7s"
 	if got := extractDesc(borderlessPane); got != want {
+		t.Errorf("extractDesc() = %q, want %q", got, want)
+	}
+}
+
+func TestExtractDescSkipsTheCodexFooter(t *testing.T) {
+	// Without the cut this returns the context-left footer, which says nothing
+	// about what this session is doing.
+	want := "Done. The retry loop now backs off and the test covers 429."
+	if got := extractDesc(codexPane); got != want {
 		t.Errorf("extractDesc() = %q, want %q", got, want)
 	}
 }
@@ -197,6 +211,23 @@ Done. Tests pass.
   ? for shortcuts
 `
 
+// codexPane is the tail of an idle Codex pane. Codex draws no box at all: the
+// composer is a "› " at column 0 carrying placeholder text, with the shortcut
+// and context-left footer under it, and a submitted prompt is the same glyph
+// again, wrapping onto two-space-indented continuations.
+const codexPane = `
+› rewrite the retry loop and add a test for the 429 case, then update
+  the README
+
+• Explored
+  └ Read client.go
+
+• Done. The retry loop now backs off and the test covers 429.
+
+› Ask Codex to do anything
+  ← for agents · ? for shortcuts                     100% context left
+`
+
 func TestHasAgentPrompt(t *testing.T) {
 	cfg = defaultConfig
 
@@ -206,6 +237,22 @@ func TestHasAgentPrompt(t *testing.T) {
 	}
 	if !hasAgentPrompt(claudePane) {
 		t.Error("hasAgentPrompt(claudePane) = false, want true")
+	}
+	// No box to find: the composer is a bare marker line, and finding it is what
+	// tells a settled Codex or borderless Claude Code pane from an idle one.
+	if !hasAgentPrompt(codexPane) {
+		t.Error("hasAgentPrompt(codexPane) = false, want true")
+	}
+	if !hasAgentPrompt(borderlessPane) {
+		t.Error("hasAgentPrompt(borderlessPane) = false, want true")
+	}
+	// A styled marker still sits at column 0 once the escapes are stripped.
+	if !hasAgentPrompt("• Done.\n\n\x1b[1m› \x1b[0m\n  ? for shortcuts\n") {
+		t.Error("hasAgentPrompt did not strip ANSI before looking for the marker")
+	}
+	// Transcript output that merely quotes an angle bracket is not an input.
+	if hasAgentPrompt("⏺ Bash(git log -1)\n  ⎿  commit abc123\n     > quoted, not a prompt\n") {
+		t.Error("hasAgentPrompt(quoted output) = true, want false")
 	}
 	if hasAgentPrompt("make: *** [build] Error 1\n$ ") {
 		t.Error("hasAgentPrompt(shell output) = true, want false")
@@ -226,6 +273,9 @@ func TestClassify(t *testing.T) {
 		want       State
 	}{
 		{"gemini settled at its prompt", geminiPane, "", stale, StateWaiting},
+		{"codex settled at its composer", codexPane, "", stale, StateWaiting},
+		{"codex still typing out", codexPane, "", fresh, StateActive},
+		{"codex exited to the shell", codexPane + "\nuser@host:~/project$ ", "", stale, StateError},
 		{"claude settled at its prompt", claudePane, "", stale, StateWaiting},
 		{"prompt on screen but still typing out", claudePane, "", fresh, StateActive},
 		{"spinner in title", geminiPane, "⠋ Working", fresh, StateActive},
@@ -260,6 +310,9 @@ func TestAgentIcon(t *testing.T) {
 
 	if got := agentIcon("claude"); got != "✻" {
 		t.Errorf("agentIcon(claude) = %q, want %q", got, "✻")
+	}
+	if got := agentIcon("codex"); got != "✵" {
+		t.Errorf("agentIcon(codex) = %q, want %q", got, "✵")
 	}
 	if got := agentIcon("GEMINI"); got != "✦" {
 		t.Errorf("agentIcon is not case-insensitive: got %q", got)

@@ -86,8 +86,8 @@ func runDoctor(ctx context.Context) error {
 }
 
 // reportConfig prints the configuration actually in force. A config file
-// replaces the defaults rather than extending them, so a file written before
-// Gemini support existed silently keeps Gemini panes out of the dashboard —
+// replaces the defaults rather than extending them, so a file written before an
+// agent was supported silently keeps that agent's panes out of the dashboard —
 // which looks exactly like detection being broken.
 func reportConfig() {
 	path := configPath()
@@ -103,13 +103,31 @@ func reportConfig() {
 	}
 	fmt.Printf("agents:  %s\n", strings.Join(cfg.AgentCommands, ", "))
 
-	if agentForCommand("gemini") == "" {
+	// Naming the built-ins that are missing, rather than one agent the check was
+	// written for, is what keeps this warning useful the next agent along.
+	var missing []string
+	for _, ac := range defaultConfig.AgentCommands {
+		if agentForCommand(ac) == "" {
+			missing = append(missing, strconv.Quote(ac))
+		}
+	}
+	if len(missing) > 0 {
+		list := strings.Join(missing, ", ")
 		fmt.Println()
-		fmt.Println("  ! \"gemini\" is not among the agents being watched, so Gemini panes")
-		fmt.Println("    are ignored. A config file replaces the defaults rather than")
-		fmt.Println("    adding to them: add \"gemini\" to agent_commands in the file above.")
+		fmt.Printf("  ! %s %s not among the agents being watched, so those panes are\n",
+			list, plural(len(missing), "is", "are"))
+		fmt.Println("    ignored. A config file replaces the defaults rather than adding to")
+		fmt.Printf("    them: add %s to agent_commands in the file above.\n", list)
 	}
 	fmt.Println()
+}
+
+// plural picks between a singular and a plural form for n items.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 type paneInfo struct {
