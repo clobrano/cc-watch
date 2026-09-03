@@ -25,9 +25,9 @@ const (
 	paneLines       = 80
 
 	// promptTailLines is how many trailing non-empty lines are searched for the
-	// agent's input box. Both Claude Code and Gemini CLI draw a footer under the
-	// box — a shortcut hint, a cwd/model line — so the box is usually a few
-	// lines up rather than the last line of the pane.
+	// agent's input. Every agent draws a footer under it — a shortcut hint, a
+	// cwd/model line, a context-left gauge — so the input is usually a few lines
+	// up rather than the last line of the pane.
 	promptTailLines = 5
 
 	// promptScrollback is how deep the one-off capture goes when a pane is first
@@ -62,15 +62,18 @@ type Config struct {
 }
 
 // defaultAgentIcons are the marks the agents are known by: Claude Code prints
-// U+273B itself, and U+2726 is the four-pointed star of the Gemini mark.
+// U+273B itself, U+2726 is the four-pointed star of the Gemini mark, and U+2735
+// is a pinwheel star for Codex, whose own mark — the ">_" of its header — is
+// already the dashboard's selection pointer and could not be reused.
 //
-// Both are deliberate choices. Each is East-Asian-width Neutral and has no
+// All three are deliberate choices. Each is East-Asian-width Neutral and has no
 // emoji presentation, so terminals draw them one column wide. The obvious
 // alternatives do not: U+2728 SPARKLES is Wide, U+2733 EIGHT SPOKED ASTERISK
 // has an emoji form a terminal may draw at double width, and the ambiguous
 // width of the triangles is what kept ">" as the selection pointer.
 var defaultAgentIcons = map[string]string{
 	"claude": "✻",
+	"codex":  "✵",
 	"gemini": "✦",
 }
 
@@ -103,7 +106,7 @@ func lookupFold(m map[string]string, key string) (string, bool) {
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude", "gemini"},
+	AgentCommands: []string{"claude", "codex", "gemini"},
 }
 
 // configPath is the optional config file. It is empty if there is no home
@@ -476,8 +479,9 @@ func update(ctx context.Context) {
 		if agent == "" {
 			// The pane command names no agent, but it may still be running one:
 			// tmux reports whatever the foreground process calls itself, which
-			// for Gemini CLI is "node" and for an agent behind a wrapper is the
-			// wrapper. Ask the process tree instead of trusting the name.
+			// for Gemini CLI and an npm-installed Codex is "node", and for an
+			// agent behind a wrapper is the wrapper. Ask the process tree
+			// instead of trusting the name.
 			if !procsScanned {
 				procs, procsScanned = scanProcesses(ctx), true
 			}
@@ -571,10 +575,18 @@ func classify(pane, title string, lastChange time.Time) State {
 	}
 }
 
-// hasAgentPrompt reports whether the agent's input box is on screen, by
-// looking at the last few non-empty lines rather than only the last one.
+// hasAgentPrompt reports whether the agent is sitting at its input, looking at
+// the last few non-empty lines rather than only the last one.
+//
+// Two shapes count, because the agents no longer agree on one: a box drawn
+// around the input, and a bare marker line with nothing around it. Codex has
+// only ever drawn the second — its composer is a "› " at column 0 above a
+// context-left footer — and newer Claude Code builds have moved to it too, which
+// is why a settled pane of either used to be reported idle rather than waiting.
 func hasAgentPrompt(pane string) bool {
-	lines := strings.Split(pane, "\n")
+	// paneText, not a plain split: the marker on a live input line is styled,
+	// and the escape sequence in front of it would push it off column 0.
+	lines := paneText(pane)
 	for i, checked := len(lines)-1, 0; i >= 0 && checked < promptTailLines; i-- {
 		l := strings.TrimSpace(lines[i])
 		if l == "" {
@@ -584,13 +596,20 @@ func hasAgentPrompt(pane string) bool {
 		if looksLikeAgentPrompt(l) {
 			return true
 		}
+		// promptMarker is deliberately strict — column 0, a space or nothing
+		// after the glyph, no box border on the line — because down here a
+		// transcript line quoting an angle bracket is all that could be mistaken
+		// for an input.
+		if _, ok := promptMarker(lines[i]); ok {
+			return true
+		}
 	}
 	return false
 }
 
 // looksLikeAgentPrompt reports whether a line is part of an agent's input box.
-// Claude Code and Gemini CLI both draw one with the same rounded box-drawing
-// characters, so one test covers both.
+// Claude Code's older UI and Gemini CLI both draw one with the same rounded
+// box-drawing characters, so one test covers both.
 func looksLikeAgentPrompt(line string) bool {
 	if !strings.ContainsAny(line, "╭╮╰╯") {
 		return false
@@ -625,10 +644,11 @@ func paneText(pane string) []string {
 	return strings.Split(strings.TrimRight(clean, " \n\t"), "\n")
 }
 
-// promptMarkers are the glyphs Claude Code has used to introduce a prompt line:
-// ASCII '>' in the older bordered UI, a chevron in the borderless one. Which one
-// you get depends on the version, so match the family rather than betting on a
-// single glyph.
+// promptMarkers are the glyphs an agent introduces a prompt line with: ASCII '>'
+// in Claude Code's older bordered UI, a chevron in the borderless one, U+203A in
+// Codex, which renders a submitted prompt and its wrapped continuations in
+// exactly that shape. Which one you get depends on the agent and its version, so
+// match the family rather than betting on a single glyph.
 var promptMarkers = []rune{'>', '❯', '⟩', '›', '〉'}
 
 // promptMarker reports whether a line is a prompt line, returning its text. The
@@ -676,9 +696,9 @@ func aboveInput(lines []string) []string {
 	return lines
 }
 
-// extractPrompt returns the last prompt the user submitted, as Claude Code
-// renders it in the transcript: a prompt line, plus the two-space-indented
-// continuation lines it wraps long prompts onto.
+// extractPrompt returns the last prompt the user submitted, as the agents render
+// it in the transcript: a prompt line, plus the two-space-indented continuation
+// lines a long prompt wraps onto — a shape Claude Code and Codex share.
 func extractPrompt(pane string) string {
 	// Dropping the live input line first is what stops a half-typed follow-up
 	// from being reported as the last prompt.

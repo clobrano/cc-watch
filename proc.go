@@ -141,6 +141,13 @@ var scriptExtensions = []string{".js", ".mjs", ".cjs", ".ts", ".py", ".rb"}
 // The second shape is what a global npm install of an agent actually looks like
 // once the bin shim has exec'd it, and it is why the package directory is only
 // trusted below a node_modules of its own.
+//
+// Both shapes are what an npm-installed Codex puts on screen: node runs the
+// shim at .../node_modules/@openai/codex/bin/codex.js, which spawns the native
+// binary from .../node_modules/@openai/codex-linux-x64/vendor/<target>/bin/codex.
+// A Codex installed any other way — brew, cargo, the install script — is a
+// binary that renames nothing, so its pane already reports "codex" and never
+// reaches here.
 func agentInPath(path string) string {
 	parts := strings.FieldsFunc(path, isPathSep)
 	if len(parts) == 0 {
