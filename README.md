@@ -11,12 +11,12 @@ lets you jump straight to the one that needs you.
 ```
   cc-watch  15:04:05
 
-    SESSION                   AGENT     STATE      LAST OUTPUT
+    SESSION                   STATE      LAST OUTPUT
     ─────────────────────────────────────────────────────────────────────
-    notes                     claude    running    Editing src/parser.go
-  > api:0.1                   gemini    waiting    Do you want to make this edit?
-    api:1.0                   claude    idle       Done. Tests pass.
-    scratch                   gemini    error      $
+    ✻ notes                   running    Editing src/parser.go
+  > ✦ api:0.1                 waiting    Type your message or @path/to/file
+    ✻ api:1.0                 idle       Done. Tests pass.
+    ✦ scratch                 error      $
 ```
 
 ## How it works
@@ -59,10 +59,19 @@ From those two signals it derives a state:
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
 
-The `AGENT` column names which agent the pane is running, so a screen of mixed
-Claude Code and Gemini CLI sessions stays readable. It is the configured name
-that matched, whether that came from the pane's command or from the process
-tree underneath it.
+Each row is marked with the agent running in it — `✻` for Claude Code, `✦` for
+Gemini CLI — so a screen of mixed sessions stays readable. The mark sits inside
+the session column rather than taking a column of its own, so it costs the
+`LAST OUTPUT` preview nothing. An agent with no icon of its own is marked with
+its initial, and `agent_icons` overrides any of them.
+
+Both default glyphs are one terminal column wide and carry no emoji
+presentation, so they do not disturb the column alignment. If yours renders
+them at double width, set an ASCII icon:
+
+```json
+{ "agent_icons": { "claude": "c", "gemini": "g" } }
+```
 
 The `LAST OUTPUT` column shows the last non-decorative line of the pane, with ANSI
 escapes and box-drawing characters stripped, so you can see what each agent is
@@ -314,6 +323,7 @@ Configuration is optional. To override the defaults, create
 ```json
 {
   "agent_commands": ["claude", "gemini", "aider"],
+  "agent_icons": { "aider": "a" },
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
@@ -321,9 +331,10 @@ Configuration is optional. To override the defaults, create
 | Key              | Default                              | Description                                                                                                                    |
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `agent_commands` | `["claude", "gemini"]`               | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
+| `agent_icons`    | `{"claude": "✻", "gemini": "✦"}`     | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
-Either key may be omitted; a missing or empty list falls back to its default. If
+Any key may be omitted; a missing or empty list falls back to its default. If
 the file is absent or cannot be parsed, all defaults are used.
 
 ## Tuning

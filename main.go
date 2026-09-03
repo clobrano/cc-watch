@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"golang.org/x/term"
 )
 
@@ -45,6 +46,52 @@ type Config struct {
 	// pane's command (#{pane_current_command}) and, when that command is only
 	// an interpreter, against the argv of the processes below the pane.
 	AgentCommands []string `json:"agent_commands"`
+	// AgentIcons overrides the glyph shown before a session name, per agent.
+	// Unlike agent_commands this is merged over the built-in icons rather than
+	// replacing them, so naming one agent leaves the others alone. It is also
+	// the escape hatch for a terminal that renders the defaults at double
+	// width: give the agent an ASCII icon such as "c".
+	AgentIcons map[string]string `json:"agent_icons"`
+}
+
+// defaultAgentIcons are the marks the agents are known by: Claude Code prints
+// U+273B itself, and U+2726 is the four-pointed star of the Gemini mark.
+//
+// Both are deliberate choices. Each is East-Asian-width Neutral and has no
+// emoji presentation, so terminals draw them one column wide. The obvious
+// alternatives do not: U+2728 SPARKLES is Wide, U+2733 EIGHT SPOKED ASTERISK
+// has an emoji form a terminal may draw at double width, and the ambiguous
+// width of the triangles is what kept ">" as the selection pointer.
+var defaultAgentIcons = map[string]string{
+	"claude": "✻",
+	"gemini": "✦",
+}
+
+// agentIcon is the glyph for an agent: configured, else built in, else the
+// agent's initial, which is always one column and tells two custom agents
+// apart without any configuration at all.
+func agentIcon(agent string) string {
+	if icon, ok := lookupFold(cfg.AgentIcons, agent); ok {
+		return icon
+	}
+	if icon, ok := lookupFold(defaultAgentIcons, agent); ok {
+		return icon
+	}
+	for _, r := range agent {
+		return string(unicode.ToUpper(r))
+	}
+	return " "
+}
+
+// lookupFold reads m by case-insensitive key, matching how agent names are
+// compared everywhere else.
+func lookupFold(m map[string]string, key string) (string, bool) {
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 var defaultConfig = Config{
@@ -583,10 +630,9 @@ func toASCII(s string) string {
 // glyphs in most terminals, which breaks column alignment.
 const (
 	nameWidth   = 24
-	agentWidth  = 8
 	stateWidth  = 9
 	gap         = 2
-	prefixWidth = 2 + 2 + nameWidth + gap + agentWidth + gap + stateWidth + gap
+	prefixWidth = 2 + 2 + nameWidth + gap + stateWidth + gap
 )
 
 func render(selected int) {
@@ -613,8 +659,8 @@ func render(selected int) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
 	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
-	fmt.Fprintf(&b, "    %s%-*s  %-*s  %-*s  %s%s\n", bold,
-		nameWidth, "SESSION", agentWidth, "AGENT", stateWidth, "STATE", "LAST OUTPUT", reset)
+	fmt.Fprintf(&b, "    %s%-*s  %-*s  %s%s\n", bold,
+		nameWidth, "SESSION", stateWidth, "STATE", "LAST OUTPUT", reset)
 	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
 
 	names := sortedNames()
@@ -635,6 +681,9 @@ func render(selected int) {
 			if sessionCount[sname] > 1 {
 				displayName = key
 			}
+			// The icon rides inside the session column rather than taking a
+			// column of its own, which would cost the description ten chars.
+			displayName = agentIcon(s.agent) + " " + displayName
 
 			pointer := "  "
 			nameStyle := dim
@@ -643,10 +692,9 @@ func render(selected int) {
 				nameStyle = reset
 			}
 			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
-			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%-*s%s  %s%s%s\n",
+			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%s%s\n",
 				pointer,
 				nameStyle, nameWidth, truncate(displayName, nameWidth), reset,
-				dim, agentWidth, truncate(s.agent, agentWidth), reset,
 				s.state.color(), stateWidth, s.state.label(), reset,
 				dim, truncate(s.desc, descWidth), reset,
 			)
@@ -717,14 +765,18 @@ func sortedNames() []string {
 	return names
 }
 
+// truncate shortens s to at most n columns. It counts runes rather than bytes:
+// an agent icon is one column but three bytes, and slicing by byte would both
+// cut names short and split the icon into mojibake.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
 	if n <= 3 {
-		return s[:n]
+		return string(r[:n])
 	}
-	return s[:n-3] + "..."
+	return string(r[:n-3]) + "..."
 }
 
 func lastNonEmptyLine(s string) string {
