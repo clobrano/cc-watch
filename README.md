@@ -14,11 +14,11 @@ lets you jump straight to the one that needs you.
 
     SESSION                   STATE      LAST PROMPT
     ──────────────────────────────────────────────────────────────────────────
-    ✻ notes                   running    rewrite the parser to accept trailing...
-  > ✦ api:0.1                 waiting    add rate limiting to the /search endpoint
-    ✵ api:1.0                 waiting    why is the integration suite flaky?
-    ✻ docs                    idle       document the new --serve flag
-    ✦ scratch                 error      $
+    CL notes                  running    rewrite the parser to accept trailing...
+  > GM api:0.1                waiting    add rate limiting to the /search endpoint
+    CX api:1.0                waiting    why is the integration suite flaky?
+    CL docs                   idle       document the new --serve flag
+    GM scratch                error      $
 ```
 
 ## How it works
@@ -75,20 +75,22 @@ From those two signals it derives a state:
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
 
-Each row is marked with the agent running in it — `✻` for Claude Code, `✵` for
-Codex, `✦` for Gemini CLI, `✶` for opencode — so a screen of mixed sessions stays
-readable. Codex's own `>_` was not an option: the dashboard already spends `>` on
-the selection pointer. The mark sits inside
-the session column rather than taking a column of its own, so it costs the
-`LAST PROMPT` text nothing. An agent with no icon of its own is marked with its
-initial, and `agent_icons` overrides any of them.
+Each row is marked with the agent running in it — `CL` for Claude Code, `CX` for
+Codex, `GM` for Gemini CLI, `OC` for opencode — so a screen of mixed sessions
+stays readable. The mark rides at the front of the session column rather than
+taking a column of its own, so it costs the `LAST PROMPT` text nothing. An agent
+with no mark of its own is marked with its uppercased initial, and `agent_icons`
+overrides any of them.
 
-All four default glyphs are one terminal column wide and carry no emoji
-presentation, so they do not disturb the column alignment. If yours renders
-them at double width, set an ASCII icon:
+The marks are two-letter ASCII codes, which is exactly two columns in every
+monospace terminal — so the rows always line up, and each mark names its agent
+outright. A single glyph per agent was tried first and dropped: the "agent star"
+dingbats render at different weights and widths from one font to the next (some
+draw them double-width), and four near-identical stars were hard to tell apart.
+If you would rather have a glyph, set one — `agent_icons` takes any string:
 
 ```json
-{ "agent_icons": { "claude": "c", "codex": "x", "gemini": "g", "opencode": "o" } }
+{ "agent_icons": { "claude": "✻", "opencode": "◆" } }
 ```
 
 The `LAST PROMPT` column shows the last thing **you** asked that agent to do. A
@@ -380,7 +382,7 @@ Configuration is optional. To override the defaults, create
 | Key              | Default                              | Description                                                                                                                    |
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `agent_commands` | `["claude", "codex", "gemini", "opencode"]`      | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
-| `agent_icons`    | `{"claude": "✻", "codex": "✵", "gemini": "✦", "opencode": "✶"}` | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
+| `agent_icons`    | `{"claude": "CL", "codex": "CX", "gemini": "GM", "opencode": "OC"}` | The mark shown before a session name, per agent. Two-letter ASCII codes by default, so the rows line up in any terminal; set any string (a glyph, a single letter) to override. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no mark of its own gets its uppercased initial. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If
