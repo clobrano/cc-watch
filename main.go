@@ -61,25 +61,25 @@ type Config struct {
 	AgentIcons map[string]string `json:"agent_icons"`
 }
 
-// defaultAgentIcons are the marks the agents are known by: Claude Code prints
-// U+273B itself, U+2726 is the four-pointed star of the Gemini mark, and U+2735
-// is a pinwheel star for Codex, whose own mark — the ">_" of its header — is
-// already the dashboard's selection pointer and could not be reused.
+// defaultAgentIcons are the two-letter marks the agents are known by: CL for
+// Claude Code, CX for Codex, GM for Gemini CLI and OC for opencode.
 //
-// All three are deliberate choices. Each is East-Asian-width Neutral and has no
-// emoji presentation, so terminals draw them one column wide. The obvious
-// alternatives do not: U+2728 SPARKLES is Wide, U+2733 EIGHT SPOKED ASTERISK
-// has an emoji form a terminal may draw at double width, and the ambiguous
-// width of the triangles is what kept ">" as the selection pointer.
+// These are ASCII on purpose. A single dingbat per agent reads well in one font
+// and badly in the next: the "agent star" glyphs are drawn at different weights,
+// some terminals render them East-Asian Wide, and four near-identical stars are
+// hard to tell apart anyway. A two-letter ASCII code is exactly two columns in
+// every monospace terminal, so the marks always line up and each names its agent
+// outright. Override any of them with agent_icons for a glyph you prefer.
 var defaultAgentIcons = map[string]string{
-	"claude": "✻",
-	"codex":  "✵",
-	"gemini": "✦",
+	"claude":   "CL",
+	"codex":    "CX",
+	"gemini":   "GM",
+	"opencode": "OC",
 }
 
-// agentIcon is the glyph for an agent: configured, else built in, else the
-// agent's initial, which is always one column and tells two custom agents
-// apart without any configuration at all.
+// agentIcon is the mark for an agent: configured, else built in, else the
+// agent's uppercased initial, which tells two custom agents apart without any
+// configuration at all.
 func agentIcon(agent string) string {
 	if icon, ok := lookupFold(cfg.AgentIcons, agent); ok {
 		return icon
@@ -106,7 +106,7 @@ func lookupFold(m map[string]string, key string) (string, bool) {
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude", "codex", "gemini"},
+	AgentCommands: []string{"claude", "codex", "gemini", "opencode"},
 }
 
 // configPath is the optional config file. It is empty if there is no home

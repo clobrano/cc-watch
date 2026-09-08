@@ -308,14 +308,17 @@ func TestLooksLikeShellPrompt(t *testing.T) {
 func TestAgentIcon(t *testing.T) {
 	cfg = defaultConfig
 
-	if got := agentIcon("claude"); got != "✻" {
-		t.Errorf("agentIcon(claude) = %q, want %q", got, "✻")
+	if got := agentIcon("claude"); got != "CL" {
+		t.Errorf("agentIcon(claude) = %q, want %q", got, "CL")
 	}
-	if got := agentIcon("codex"); got != "✵" {
-		t.Errorf("agentIcon(codex) = %q, want %q", got, "✵")
+	if got := agentIcon("codex"); got != "CX" {
+		t.Errorf("agentIcon(codex) = %q, want %q", got, "CX")
 	}
-	if got := agentIcon("GEMINI"); got != "✦" {
+	if got := agentIcon("GEMINI"); got != "GM" {
 		t.Errorf("agentIcon is not case-insensitive: got %q", got)
+	}
+	if got := agentIcon("opencode"); got != "OC" {
+		t.Errorf("agentIcon(opencode) = %q, want %q", got, "OC")
 	}
 	// An agent with no icon of its own falls back to its initial, which still
 	// tells two custom agents apart.
@@ -335,26 +338,27 @@ func TestAgentIcon(t *testing.T) {
 	if got := agentIcon("claude"); got != "c" {
 		t.Errorf("configured icon ignored: got %q, want %q", got, "c")
 	}
-	if got := agentIcon("gemini"); got != "✦" {
+	if got := agentIcon("gemini"); got != "GM" {
 		t.Errorf("configuring one icon disturbed another: got %q", got)
 	}
 	cfg = defaultConfig
 }
 
-func TestDefaultIconsAreSingleColumn(t *testing.T) {
-	// Every row's columns line up only if the icon is exactly one column wide.
-	// Guard the built-ins against being swapped for a wide or emoji glyph —
-	// U+2728 SPARKLES is East-Asian Wide, and the dingbats below carry an emoji
-	// presentation that terminals may draw at double width.
-	emojiDingbats := map[rune]bool{0x2728: true, 0x2733: true, 0x2734: true, 0x2747: true}
+func TestDefaultIconsAreASCII(t *testing.T) {
+	// The marks sit in a fixed-width column, so every character must be plain
+	// printable ASCII — exactly one terminal column in any monospace font. A
+	// multi-byte glyph (a dingbat star, an emoji) can render East-Asian Wide or
+	// at an inconsistent weight and break the alignment, which is why the star
+	// marks were dropped for two-letter codes.
 	for agent, icon := range defaultAgentIcons {
-		r := []rune(icon)
-		if len(r) != 1 {
-			t.Errorf("icon for %s is %d runes, want 1", agent, len(r))
+		if icon == "" {
+			t.Errorf("icon for %s is empty", agent)
 			continue
 		}
-		if emojiDingbats[r[0]] || r[0] >= 0x1F300 {
-			t.Errorf("icon for %s (%U) has an emoji presentation and may render double width", agent, r[0])
+		for _, r := range icon {
+			if r < 0x20 || r > 0x7E {
+				t.Errorf("icon for %s (%q) has non-ASCII rune %U; marks must be ASCII to stay one column wide", agent, icon, r)
+			}
 		}
 	}
 }
