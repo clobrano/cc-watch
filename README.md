@@ -76,7 +76,7 @@ From those two signals it derives a state:
 | `unknown` | grey   | The pane is empty                                                            |
 
 Each row is marked with the agent running in it — `✻` for Claude Code, `✵` for
-Codex, `✦` for Gemini CLI, `✸` for opencode — so a screen of mixed sessions stays
+Codex, `✦` for Gemini CLI, `✶` for opencode — so a screen of mixed sessions stays
 readable. Codex's own `>_` was not an option: the dashboard already spends `>` on
 the selection pointer. The mark sits inside
 the session column rather than taking a column of its own, so it costs the
@@ -380,7 +380,7 @@ Configuration is optional. To override the defaults, create
 | Key              | Default                              | Description                                                                                                                    |
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `agent_commands` | `["claude", "codex", "gemini", "opencode"]`      | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
-| `agent_icons`    | `{"claude": "✻", "codex": "✵", "gemini": "✦", "opencode": "✸"}` | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
+| `agent_icons`    | `{"claude": "✻", "codex": "✵", "gemini": "✦", "opencode": "✶"}` | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

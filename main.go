@@ -64,19 +64,21 @@ type Config struct {
 // defaultAgentIcons are the marks the agents are known by: Claude Code prints
 // U+273B itself, U+2726 is the four-pointed star of the Gemini mark, U+2735 is a
 // pinwheel star for Codex, whose own mark — the ">_" of its header — is already
-// the dashboard's selection pointer and could not be reused, and U+2738 is an
-// eight-pointed star for opencode, which has no ASCII mark of its own to borrow.
+// the dashboard's selection pointer and could not be reused, and U+2736 is a
+// six-pointed star for opencode, which has no ASCII mark of its own to borrow.
 //
 // All four are deliberate choices. Each is East-Asian-width Neutral and has no
 // emoji presentation, so terminals draw them one column wide. The obvious
 // alternatives do not: U+2728 SPARKLES is Wide, U+2733 EIGHT SPOKED ASTERISK
-// has an emoji form a terminal may draw at double width, and the ambiguous
-// width of the triangles is what kept ">" as the selection pointer.
+// has an emoji form a terminal may draw at double width, the ambiguous width of
+// the triangles is what kept ">" as the selection pointer, and the HEAVY
+// dingbats such as U+2738 render with much thicker strokes than these four, so
+// they look out of place in the same column.
 var defaultAgentIcons = map[string]string{
 	"claude":   "✻",
 	"codex":    "✵",
 	"gemini":   "✦",
-	"opencode": "✸",
+	"opencode": "✶",
 }
 
 // agentIcon is the glyph for an agent: configured, else built in, else the
