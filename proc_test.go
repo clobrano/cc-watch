@@ -22,11 +22,17 @@ func TestAgentInArgs(t *testing.T) {
 		{"node /usr/lib/node_modules/@openai/codex/bin/codex.js", "codex"},
 		{"/usr/lib/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex", "codex"},
 		{"/home/u/.local/bin/codex --model gpt-5", "codex"},
+		// opencode: a native binary either way — the npm package lays it down at
+		// node_modules/opencode-ai/bin/opencode.exe, brew and the install script
+		// drop a plain "opencode". No node interpreter runs it.
+		{"/usr/lib/node_modules/opencode-ai/bin/opencode.exe", "opencode"},
+		{"/home/u/.opencode/bin/opencode", "opencode"},
 		// Not agents: the name only appears in a later argument, in a directory
 		// the program happens to live under, or not at all.
 		{"node build.js gemini.json", ""},
 		{"node /home/u/gemini-experiments/server.js", ""},
 		{"node /home/u/codex-experiments/server.js", ""},
+		{"node /home/u/opencode-experiments/server.js", ""},
 		{"node build.js codex.json", ""},
 		{"node /tmp/claude-0/scratch/server.js", ""},
 		{"node /srv/app/server.js", ""},
@@ -45,9 +51,10 @@ func TestAgentInArgs(t *testing.T) {
 func TestAgentInTree(t *testing.T) {
 	cfg = defaultConfig
 
-	// pane shell (100) -> wrapper (200) -> node running gemini (300), and a
-	// second pane shell (500) -> the Codex npm shim (600) -> the native binary
-	// it spawns (700), which is two steps below the pane either way.
+	// pane shell (100) -> wrapper (200) -> node running gemini (300), a second
+	// pane shell (500) -> the Codex npm shim (600) -> the native binary it spawns
+	// (700), and a third pane shell (800) -> the opencode native binary (900),
+	// which npm lays down under its own package directory.
 	tbl := &procTable{
 		args: map[int]string{
 			100: "-bash",
@@ -57,14 +64,19 @@ func TestAgentInTree(t *testing.T) {
 			500: "-zsh",
 			600: "node /usr/lib/node_modules/@openai/codex/bin/codex.js",
 			700: "/usr/lib/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+			800: "-bash",
+			900: "/usr/lib/node_modules/opencode-ai/bin/opencode.exe",
 		},
-		children: map[int][]int{100: {200}, 200: {300}, 500: {600}, 600: {700}},
+		children: map[int][]int{100: {200}, 200: {300}, 500: {600}, 600: {700}, 800: {900}},
 	}
 	if got := tbl.agentInTree(100); got != "gemini" {
 		t.Errorf("agentInTree(100) = %q, want %q", got, "gemini")
 	}
 	if got := tbl.agentInTree(500); got != "codex" {
 		t.Errorf("agentInTree(500) = %q, want %q", got, "codex")
+	}
+	if got := tbl.agentInTree(800); got != "opencode" {
+		t.Errorf("agentInTree(800) = %q, want %q", got, "opencode")
 	}
 	if got := tbl.agentInTree(400); got != "" {
 		t.Errorf("agentInTree(400) = %q, want %q", got, "")

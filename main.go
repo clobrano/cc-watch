@@ -62,19 +62,21 @@ type Config struct {
 }
 
 // defaultAgentIcons are the marks the agents are known by: Claude Code prints
-// U+273B itself, U+2726 is the four-pointed star of the Gemini mark, and U+2735
-// is a pinwheel star for Codex, whose own mark — the ">_" of its header — is
-// already the dashboard's selection pointer and could not be reused.
+// U+273B itself, U+2726 is the four-pointed star of the Gemini mark, U+2735 is a
+// pinwheel star for Codex, whose own mark — the ">_" of its header — is already
+// the dashboard's selection pointer and could not be reused, and U+2738 is an
+// eight-pointed star for opencode, which has no ASCII mark of its own to borrow.
 //
-// All three are deliberate choices. Each is East-Asian-width Neutral and has no
+// All four are deliberate choices. Each is East-Asian-width Neutral and has no
 // emoji presentation, so terminals draw them one column wide. The obvious
 // alternatives do not: U+2728 SPARKLES is Wide, U+2733 EIGHT SPOKED ASTERISK
 // has an emoji form a terminal may draw at double width, and the ambiguous
 // width of the triangles is what kept ">" as the selection pointer.
 var defaultAgentIcons = map[string]string{
-	"claude": "✻",
-	"codex":  "✵",
-	"gemini": "✦",
+	"claude":   "✻",
+	"codex":    "✵",
+	"gemini":   "✦",
+	"opencode": "✸",
 }
 
 // agentIcon is the glyph for an agent: configured, else built in, else the
@@ -106,7 +108,7 @@ func lookupFold(m map[string]string, key string) (string, bool) {
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude", "codex", "gemini"},
+	AgentCommands: []string{"claude", "codex", "gemini", "opencode"},
 }
 
 // configPath is the optional config file. It is empty if there is no home

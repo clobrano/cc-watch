@@ -1,7 +1,8 @@
 # cc-watch
 
 A terminal dashboard for coding-agent sessions running inside tmux. Claude Code,
-Codex and Gemini CLI are watched out of the box; other agents can be added.
+Codex, Gemini CLI and opencode are watched out of the box; other agents can be
+added.
 
 When you have several agents working in parallel across tmux windows and panes, it
 is hard to tell which one is still thinking, which one is waiting for your input,
@@ -23,8 +24,8 @@ lets you jump straight to the one that needs you.
 ## How it works
 
 Every 2 seconds `cc-watch` runs `tmux list-panes -a` to enumerate every pane in
-every session, keeps the ones running a configured agent (`claude`, `codex` and
-`gemini` by default), and inspects each of them:
+every session, keeps the ones running a configured agent (`claude`, `codex`,
+`gemini` and `opencode` by default), and inspects each of them:
 
 - the pane title, via `tmux display-message -p '#{pane_title}'`
 - the last 80 lines of output, via `tmux capture-pane -p`
@@ -51,6 +52,12 @@ spawning the platform binary underneath
 (`.../node_modules/@openai/codex-linux-x64/vendor/<target>/bin/codex`). Both of
 those are found by the same walk.
 
+opencode is a native binary whichever way it is installed, so it usually needs
+no walk at all: its pane reports `opencode` and matching that is enough. The one
+exception is an npm install, which lays the binary down under its own package
+directory (`.../node_modules/opencode-ai/bin/opencode.exe`) — that path is
+matched the same way an installed package is for the agents above.
+
 An argument only counts if it is an agent's executable or an installed agent
 package, so a pane running `node server.js` from a directory named
 `codex-experiments`, or passing a `gemini.json` config, is not mistaken for an
@@ -69,19 +76,19 @@ From those two signals it derives a state:
 | `unknown` | grey   | The pane is empty                                                            |
 
 Each row is marked with the agent running in it — `✻` for Claude Code, `✵` for
-Codex, `✦` for Gemini CLI — so a screen of mixed sessions stays readable. Codex's
-own `>_` was not an option: the dashboard already spends `>` on the selection
-pointer. The mark sits inside
+Codex, `✦` for Gemini CLI, `✸` for opencode — so a screen of mixed sessions stays
+readable. Codex's own `>_` was not an option: the dashboard already spends `>` on
+the selection pointer. The mark sits inside
 the session column rather than taking a column of its own, so it costs the
 `LAST PROMPT` text nothing. An agent with no icon of its own is marked with its
 initial, and `agent_icons` overrides any of them.
 
-All three default glyphs are one terminal column wide and carry no emoji
+All four default glyphs are one terminal column wide and carry no emoji
 presentation, so they do not disturb the column alignment. If yours renders
 them at double width, set an ASCII icon:
 
 ```json
-{ "agent_icons": { "claude": "c", "codex": "x", "gemini": "g" } }
+{ "agent_icons": { "claude": "c", "codex": "x", "gemini": "g", "opencode": "o" } }
 ```
 
 The `LAST PROMPT` column shows the last thing **you** asked that agent to do. A
@@ -327,7 +334,7 @@ $ cc-watch --doctor
 cc-watch doctor
 
 config:  /home/u/.config/cc-watch/config.json (absent) — built-in defaults
-agents:  claude, codex, gemini
+agents:  claude, codex, gemini, opencode
 
 PANE                      COMMAND         PID       AGENT
 ------------------------------------------------------------------------
@@ -335,8 +342,9 @@ work:0.0                  node            1855      gemini (process tree)
 work:1.0                  claude          1864      claude (pane command)
 work:2.0                  node            1874      -
 work:3.0                  codex           1902      codex (pane command)
+work:4.0                  opencode        1918      opencode (pane command)
 
-3 pane(s) recognised as agents.
+4 pane(s) recognised as agents.
 
 Processes under the panes that were not recognised. ...
 
@@ -349,7 +357,7 @@ The two usual causes:
 
 - **A config file from before the agent was supported.** `agent_commands`
   *replaces* the defaults rather than adding to them, so a file listing only
-  `["claude"]` keeps Codex and Gemini panes out no matter what. `--doctor` prints
+  `["claude"]` keeps Codex, Gemini and opencode panes out no matter what. `--doctor` prints
   the file in force and the agents it yields, and names any built-in agent the
   file has dropped.
 - **An install layout that is not matched.** If the doctor shows the agent's
@@ -363,7 +371,7 @@ Configuration is optional. To override the defaults, create
 
 ```json
 {
-  "agent_commands": ["claude", "codex", "gemini", "aider"],
+  "agent_commands": ["claude", "codex", "gemini", "opencode", "aider"],
   "agent_icons": { "aider": "a" },
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
@@ -371,8 +379,8 @@ Configuration is optional. To override the defaults, create
 
 | Key              | Default                              | Description                                                                                                                    |
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `agent_commands` | `["claude", "codex", "gemini"]`      | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
-| `agent_icons`    | `{"claude": "✻", "codex": "✵", "gemini": "✦"}` | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
+| `agent_commands` | `["claude", "codex", "gemini", "opencode"]`      | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
+| `agent_icons`    | `{"claude": "✻", "codex": "✵", "gemini": "✦", "opencode": "✸"}` | The mark shown before a session name, per agent. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no icon gets its initial. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

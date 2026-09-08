@@ -317,6 +317,9 @@ func TestAgentIcon(t *testing.T) {
 	if got := agentIcon("GEMINI"); got != "✦" {
 		t.Errorf("agentIcon is not case-insensitive: got %q", got)
 	}
+	if got := agentIcon("opencode"); got != "✸" {
+		t.Errorf("agentIcon(opencode) = %q, want %q", got, "✸")
+	}
 	// An agent with no icon of its own falls back to its initial, which still
 	// tells two custom agents apart.
 	if got := agentIcon("aider"); got != "A" {

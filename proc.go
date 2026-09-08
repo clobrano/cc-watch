@@ -148,6 +148,12 @@ var scriptExtensions = []string{".js", ".mjs", ".cjs", ".ts", ".py", ".rb"}
 // A Codex installed any other way — brew, cargo, the install script — is a
 // binary that renames nothing, so its pane already reports "codex" and never
 // reaches here.
+//
+// opencode is the second shape without the first: no node in the middle. Its bin
+// is itself a native binary (.../node_modules/opencode-ai/bin/opencode.exe from
+// npm, a plain "opencode" from brew or the install script), so a pane usually
+// reports "opencode" directly; when it does not, the tree walk matches the
+// installed "opencode-ai" package directory.
 func agentInPath(path string) string {
 	parts := strings.FieldsFunc(path, isPathSep)
 	if len(parts) == 0 {
