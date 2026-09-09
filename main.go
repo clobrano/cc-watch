@@ -176,10 +176,12 @@ func (s State) tmuxColor() string {
 	switch s {
 	case StateActive:
 		return "green"
-	case StateIdle:
-		return "yellow"
 	case StateWaiting:
-		return "cyan"
+		return "yellow"
+	case StateIdle:
+		return "colour244"
+	case StateStarting:
+		return "blue"
 	case StateError:
 		return "red"
 	default:
@@ -190,15 +192,15 @@ func (s State) tmuxColor() string {
 func (s State) color() string {
 	switch s {
 	case StateStarting:
-		return "\033[90m"
+		return "\033[34m" // blue
 	case StateActive:
-		return "\033[32m"
+		return "\033[32m" // green
 	case StateIdle:
-		return "\033[33m"
+		return "\033[90m" // bright-black (gray)
 	case StateWaiting:
-		return "\033[36m"
+		return "\033[33m" // yellow
 	case StateError:
-		return "\033[31m"
+		return "\033[31m" // red
 	default:
 		return "\033[90m"
 	}
