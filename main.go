@@ -175,9 +175,9 @@ func (s State) label() string {
 func (s State) tmuxColor() string {
 	switch s {
 	case StateActive:
-		return "green"
-	case StateWaiting:
 		return "yellow"
+	case StateWaiting:
+		return "green"
 	case StateIdle:
 		return "colour244"
 	case StateStarting:
@@ -194,11 +194,11 @@ func (s State) color() string {
 	case StateStarting:
 		return "\033[34m" // blue
 	case StateActive:
-		return "\033[32m" // green
+		return "\033[33m" // yellow
 	case StateIdle:
 		return "\033[90m" // bright-black (gray)
 	case StateWaiting:
-		return "\033[33m" // yellow
+		return "\033[32m" // green
 	case StateError:
 		return "\033[31m" // red
 	default:
@@ -852,7 +852,7 @@ func render(selected int) {
 }
 
 // updateStatusBar publishes a numbered, state-coloured strip of the detected
-// agents to a tmux user option, e.g. "1 2 3" with 1 green and 2 yellow. The
+// agents to a tmux user option, e.g. "1 2 3" with 1 yellow and 2 green. The
 // numbers are positional over the same sorted list the TUI renders, so agent N
 // in the status bar is row N in the dashboard — which also means they shift
 // when a pane appears or dies. The option is inert until referenced, so the
