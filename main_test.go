@@ -320,6 +320,9 @@ func TestAgentIcon(t *testing.T) {
 	if got := agentIcon("opencode"); got != "OC" {
 		t.Errorf("agentIcon(opencode) = %q, want %q", got, "OC")
 	}
+	if got := agentIcon("pi"); got != "PI" {
+		t.Errorf("agentIcon(pi) = %q, want %q", got, "PI")
+	}
 	// An agent with no icon of its own falls back to its initial, which still
 	// tells two custom agents apart.
 	if got := agentIcon("aider"); got != "A" {

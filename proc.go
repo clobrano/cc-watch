@@ -154,6 +154,11 @@ var scriptExtensions = []string{".js", ".mjs", ".cjs", ".ts", ".py", ".rb"}
 // npm, a plain "opencode" from brew or the install script), so a pane usually
 // reports "opencode" directly; when it does not, the tree walk matches the
 // installed "opencode-ai" package directory.
+//
+// pi is Gemini's shape again: an npm package whose bin shim is a node script,
+// so a pane can report "node" and the walk finds either the shim (.../bin/pi)
+// or the script it runs (.../node_modules/@mariozechner/pi-coding-agent/dist/cli.js),
+// whose package directory is named for the agent.
 func agentInPath(path string) string {
 	parts := strings.FieldsFunc(path, isPathSep)
 	if len(parts) == 0 {

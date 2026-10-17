@@ -62,7 +62,7 @@ type Config struct {
 }
 
 // defaultAgentIcons are the two-letter marks the agents are known by: CL for
-// Claude Code, CX for Codex, GM for Gemini CLI and OC for opencode.
+// Claude Code, CX for Codex, GM for Gemini CLI, OC for opencode and PI for pi.
 //
 // These are ASCII on purpose. A single dingbat per agent reads well in one font
 // and badly in the next: the "agent star" glyphs are drawn at different weights,
@@ -75,6 +75,7 @@ var defaultAgentIcons = map[string]string{
 	"codex":    "CX",
 	"gemini":   "GM",
 	"opencode": "OC",
+	"pi":       "PI",
 }
 
 // agentIcon is the mark for an agent: configured, else built in, else the
@@ -106,7 +107,7 @@ func lookupFold(m map[string]string, key string) (string, bool) {
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude", "codex", "gemini", "opencode"},
+	AgentCommands: []string{"claude", "codex", "gemini", "opencode", "pi"},
 }
 
 // configPath is the optional config file. It is empty if there is no home
@@ -481,7 +482,7 @@ func update(ctx context.Context) {
 		if agent == "" {
 			// The pane command names no agent, but it may still be running one:
 			// tmux reports whatever the foreground process calls itself, which
-			// for Gemini CLI and an npm-installed Codex is "node", and for an
+			// for Gemini CLI, pi and an npm-installed Codex is "node", and for an
 			// agent behind a wrapper is the wrapper. Ask the process tree
 			// instead of trusting the name.
 			if !procsScanned {
