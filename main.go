@@ -62,7 +62,7 @@ type Config struct {
 }
 
 // defaultAgentIcons are the two-letter marks the agents are known by: CL for
-// Claude Code, CX for Codex, GM for Gemini CLI and OC for opencode.
+// Claude Code, CX for Codex, GM for Gemini CLI, OC for opencode and PI for pi.
 //
 // These are ASCII on purpose. A single dingbat per agent reads well in one font
 // and badly in the next: the "agent star" glyphs are drawn at different weights,
@@ -75,6 +75,7 @@ var defaultAgentIcons = map[string]string{
 	"codex":    "CX",
 	"gemini":   "GM",
 	"opencode": "OC",
+	"pi":       "PI",
 }
 
 // agentIcon is the mark for an agent: configured, else built in, else the
@@ -106,7 +107,7 @@ func lookupFold(m map[string]string, key string) (string, bool) {
 
 var defaultConfig = Config{
 	ShellPrompts:  []string{"$", "#", "%", "❯", "→", "λ"},
-	AgentCommands: []string{"claude", "codex", "gemini", "opencode"},
+	AgentCommands: []string{"claude", "codex", "gemini", "opencode", "pi"},
 }
 
 // configPath is the optional config file. It is empty if there is no home
@@ -481,7 +482,7 @@ func update(ctx context.Context) {
 		if agent == "" {
 			// The pane command names no agent, but it may still be running one:
 			// tmux reports whatever the foreground process calls itself, which
-			// for Gemini CLI and an npm-installed Codex is "node", and for an
+			// for Gemini CLI, pi and an npm-installed Codex is "node", and for an
 			// agent behind a wrapper is the wrapper. Ask the process tree
 			// instead of trusting the name.
 			if !procsScanned {
@@ -605,8 +606,24 @@ func hasAgentPrompt(pane string) bool {
 		if _, ok := promptMarker(lines[i]); ok {
 			return true
 		}
+		// pi's editor is neither shape: no box corners and no marker, just a
+		// full-width rule above and below the input.
+		if isRule(l) {
+			return true
+		}
 	}
 	return false
+}
+
+// isRule reports whether a line is a horizontal rule: box-drawing dashes end to
+// end, with anything between them (a scroll hint such as "─── ↑ 2 more ───")
+// allowed as long as no box corner or side makes it part of a box instead.
+func isRule(line string) bool {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, "─") || !strings.HasSuffix(t, "─") {
+		return false
+	}
+	return !strings.ContainsAny(t, "╭╮╰╯│┌┐└┘")
 }
 
 // looksLikeAgentPrompt reports whether a line is part of an agent's input box.
@@ -694,6 +711,26 @@ func aboveInput(lines []string) []string {
 		if _, ok := promptMarker(lines[i]); ok {
 			return lines[:i]
 		}
+	}
+	// Neither found: pi draws its editor between two horizontal rules, with a
+	// cwd line and a token/cost/model statusline under it. Cut at the upper rule
+	// of the bottom-most pair, so that neither the statusline nor a half-typed
+	// draft is read as transcript. This runs only when the shapes above found
+	// nothing, because Claude Code's borderless UI also draws rules around its
+	// input and is already handled by its prompt marker.
+	bottom := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !isRule(lines[i]) {
+			continue
+		}
+		if bottom < 0 {
+			bottom = i
+			continue
+		}
+		return lines[:i]
+	}
+	if bottom >= 0 {
+		return lines[:bottom]
 	}
 	return lines
 }

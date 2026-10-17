@@ -228,6 +228,33 @@ const codexPane = `
   ← for agents · ? for shortcuts                     100% context left
 `
 
+// piPane is the tail of an idle pi pane: the transcript, the editor between two
+// rules, then the cwd line and the token/cost/model statusline. pi draws no
+// prompt glyph and no box, and its user messages are set apart by background
+// colour only.
+const piPane = `
+ add a retry to the fetch helper
+
+ Added a retry with backoff to fetchJSON; tests pass.
+
+─────────────────────────────────────────────────────────────
+ half-typed follow-up
+─────────────────────────────────────────────────────────────
+~/project (main)
+↑12k ↓3.4k R40k $0.123 12.3%/200k              claude-sonnet-4
+`
+
+func TestExtractDescSkipsThePiStatusline(t *testing.T) {
+	// Before the editor's rules were recognised this returned the statusline.
+	want := "Added a retry with backoff to fetchJSON; tests pass."
+	if got := extractDesc(piPane); got != want {
+		t.Errorf("extractDesc() = %q, want %q", got, want)
+	}
+	if got := extractPrompt(piPane); got != "" {
+		t.Errorf("extractPrompt() = %q, want none", got)
+	}
+}
+
 func TestHasAgentPrompt(t *testing.T) {
 	cfg = defaultConfig
 
@@ -245,6 +272,10 @@ func TestHasAgentPrompt(t *testing.T) {
 	}
 	if !hasAgentPrompt(borderlessPane) {
 		t.Error("hasAgentPrompt(borderlessPane) = false, want true")
+	}
+	// Nor in pi: its editor is only a pair of rules above the statusline.
+	if !hasAgentPrompt(piPane) {
+		t.Error("hasAgentPrompt(piPane) = false, want true")
 	}
 	// A styled marker still sits at column 0 once the escapes are stripped.
 	if !hasAgentPrompt("• Done.\n\n\x1b[1m› \x1b[0m\n  ? for shortcuts\n") {
@@ -319,6 +350,9 @@ func TestAgentIcon(t *testing.T) {
 	}
 	if got := agentIcon("opencode"); got != "OC" {
 		t.Errorf("agentIcon(opencode) = %q, want %q", got, "OC")
+	}
+	if got := agentIcon("pi"); got != "PI" {
+		t.Errorf("agentIcon(pi) = %q, want %q", got, "PI")
 	}
 	// An agent with no icon of its own falls back to its initial, which still
 	// tells two custom agents apart.

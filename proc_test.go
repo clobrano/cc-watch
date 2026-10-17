@@ -27,12 +27,17 @@ func TestAgentInArgs(t *testing.T) {
 		// drop a plain "opencode". No node interpreter runs it.
 		{"/usr/lib/node_modules/opencode-ai/bin/opencode.exe", "opencode"},
 		{"/home/u/.opencode/bin/opencode", "opencode"},
+		// pi: an npm package run by node, through its bin shim or directly.
+		{"node /home/u/.npm-global/bin/pi", "pi"},
+		{"node /usr/lib/node_modules/@mariozechner/pi-coding-agent/dist/cli.js", "pi"},
 		// Not agents: the name only appears in a later argument, in a directory
 		// the program happens to live under, or not at all.
 		{"node build.js gemini.json", ""},
 		{"node /home/u/gemini-experiments/server.js", ""},
 		{"node /home/u/codex-experiments/server.js", ""},
 		{"node /home/u/opencode-experiments/server.js", ""},
+		{"node /home/u/pi-experiments/server.js", ""},
+		{"node /usr/lib/node_modules/pino/bin.js", ""},
 		{"node build.js codex.json", ""},
 		{"node /tmp/claude-0/scratch/server.js", ""},
 		{"node /srv/app/server.js", ""},
@@ -54,20 +59,23 @@ func TestAgentInTree(t *testing.T) {
 	// pane shell (100) -> wrapper (200) -> node running gemini (300), a second
 	// pane shell (500) -> the Codex npm shim (600) -> the native binary it spawns
 	// (700), and a third pane shell (800) -> the opencode native binary (900),
-	// which npm lays down under its own package directory.
+	// which npm lays down under its own package directory, and a fourth pane shell
+	// (1000) -> node running pi (1100).
 	tbl := &procTable{
 		args: map[int]string{
-			100: "-bash",
-			200: "/bin/sh /usr/local/bin/start-agent",
-			300: "node /usr/lib/node_modules/@google/gemini-cli/dist/index.js",
-			400: "node /srv/app/server.js",
-			500: "-zsh",
-			600: "node /usr/lib/node_modules/@openai/codex/bin/codex.js",
-			700: "/usr/lib/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
-			800: "-bash",
-			900: "/usr/lib/node_modules/opencode-ai/bin/opencode.exe",
+			100:  "-bash",
+			200:  "/bin/sh /usr/local/bin/start-agent",
+			300:  "node /usr/lib/node_modules/@google/gemini-cli/dist/index.js",
+			400:  "node /srv/app/server.js",
+			500:  "-zsh",
+			600:  "node /usr/lib/node_modules/@openai/codex/bin/codex.js",
+			700:  "/usr/lib/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+			800:  "-bash",
+			900:  "/usr/lib/node_modules/opencode-ai/bin/opencode.exe",
+			1000: "-bash",
+			1100: "node /usr/lib/node_modules/@mariozechner/pi-coding-agent/dist/cli.js",
 		},
-		children: map[int][]int{100: {200}, 200: {300}, 500: {600}, 600: {700}, 800: {900}},
+		children: map[int][]int{100: {200}, 200: {300}, 500: {600}, 600: {700}, 800: {900}, 1000: {1100}},
 	}
 	if got := tbl.agentInTree(100); got != "gemini" {
 		t.Errorf("agentInTree(100) = %q, want %q", got, "gemini")
@@ -77,6 +85,9 @@ func TestAgentInTree(t *testing.T) {
 	}
 	if got := tbl.agentInTree(800); got != "opencode" {
 		t.Errorf("agentInTree(800) = %q, want %q", got, "opencode")
+	}
+	if got := tbl.agentInTree(1000); got != "pi" {
+		t.Errorf("agentInTree(1000) = %q, want %q", got, "pi")
 	}
 	if got := tbl.agentInTree(400); got != "" {
 		t.Errorf("agentInTree(400) = %q, want %q", got, "")
