@@ -117,6 +117,11 @@ text — but it is always the bottom-most one on screen, which is anchor enough:
 above it is transcript, below it is only the footer. The older UI walls its input
 off inside a box instead, so whichever turns up first scanning up from the
 footer, a box border or a bare glyph, marks the bottom of the input region.
+pi has neither: its editor sits between two horizontal rules, above a cwd line
+and a token/cost/model statusline, so when no box or glyph is found the upper
+rule of the bottom-most pair is taken as the bottom of the transcript instead.
+pi marks a submitted prompt only by its background colour, which a plain capture
+does not carry, so for pi the column shows the last line of the transcript.
 
 Once seen, a prompt is kept: a long turn pushes it out of the captured window
 well before the agent is done, and blanking the column for the rest of the turn

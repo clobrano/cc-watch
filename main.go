@@ -606,8 +606,24 @@ func hasAgentPrompt(pane string) bool {
 		if _, ok := promptMarker(lines[i]); ok {
 			return true
 		}
+		// pi's editor is neither shape: no box corners and no marker, just a
+		// full-width rule above and below the input.
+		if isRule(l) {
+			return true
+		}
 	}
 	return false
+}
+
+// isRule reports whether a line is a horizontal rule: box-drawing dashes end to
+// end, with anything between them (a scroll hint such as "─── ↑ 2 more ───")
+// allowed as long as no box corner or side makes it part of a box instead.
+func isRule(line string) bool {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, "─") || !strings.HasSuffix(t, "─") {
+		return false
+	}
+	return !strings.ContainsAny(t, "╭╮╰╯│┌┐└┘")
 }
 
 // looksLikeAgentPrompt reports whether a line is part of an agent's input box.
@@ -695,6 +711,26 @@ func aboveInput(lines []string) []string {
 		if _, ok := promptMarker(lines[i]); ok {
 			return lines[:i]
 		}
+	}
+	// Neither found: pi draws its editor between two horizontal rules, with a
+	// cwd line and a token/cost/model statusline under it. Cut at the upper rule
+	// of the bottom-most pair, so that neither the statusline nor a half-typed
+	// draft is read as transcript. This runs only when the shapes above found
+	// nothing, because Claude Code's borderless UI also draws rules around its
+	// input and is already handled by its prompt marker.
+	bottom := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !isRule(lines[i]) {
+			continue
+		}
+		if bottom < 0 {
+			bottom = i
+			continue
+		}
+		return lines[:i]
+	}
+	if bottom >= 0 {
+		return lines[:bottom]
 	}
 	return lines
 }
