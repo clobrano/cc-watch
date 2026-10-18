@@ -93,8 +93,7 @@ func daemonPID() (int, error) {
 	return pid, nil
 }
 
-// startDaemon re-executes cc-watch with --serve in a new session and returns
-// as soon as the child has taken the pid file lock.
+// startDaemon is --serve run from a shell: start the daemon, or say why not.
 func startDaemon() error {
 	if daemonRunning() {
 		if pid, err := daemonPID(); err == nil {
@@ -102,22 +101,34 @@ func startDaemon() error {
 		}
 		return errDaemonRunning
 	}
-
-	exe, err := os.Executable()
+	pid, err := spawnDaemon()
 	if err != nil {
 		return err
 	}
+	fmt.Printf("cc-watch daemon started (pid %d)\n", pid)
+	return nil
+}
+
+// spawnDaemon re-executes cc-watch with --serve in a new session and returns
+// as soon as the child accepts connections on its socket. Waiting for the
+// socket rather than the lock means a dashboard can connect the moment this
+// returns.
+func spawnDaemon() (int, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, err
+	}
 	if err := os.MkdirAll(runtimeDir(), 0o700); err != nil {
-		return err
+		return 0, err
 	}
 	logFile, err := os.OpenFile(logFilePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer logFile.Close()
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer devNull.Close()
 
@@ -130,20 +141,35 @@ func startDaemon() error {
 	// the shell that started it (and never steals terminal input).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return err
+		return 0, err
 	}
 	pid := cmd.Process.Pid
-	cmd.Process.Release() // no wait(): the child is orphaned to init on purpose
+	// Reap the child if it dies during startup (it lost the lock race, say), so
+	// the wait below can tell; once it is up it outlives us and is reparented
+	// to init.
+	exited := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(exited)
+	}()
 
 	deadline := time.Now().Add(stopTimeout)
 	for time.Now().Before(deadline) {
-		if daemonRunning() {
-			fmt.Printf("cc-watch daemon started (pid %d)\n", pid)
-			return nil
+		if conn, err := dialDaemon(); err == nil {
+			conn.Close()
+			return pid, nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-exited:
+			if daemonRunning() {
+				// Another daemon won the race to the lock; it is just as good.
+				return 0, errDaemonRunning
+			}
+			return 0, fmt.Errorf("daemon exited during startup; see %s", logFilePath())
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
-	return fmt.Errorf("daemon did not start within %s; see %s", stopTimeout, logFilePath())
+	return 0, fmt.Errorf("daemon did not start within %s; see %s", stopTimeout, logFilePath())
 }
 
 // stopServer signals the running daemon and waits for it to exit.
@@ -170,8 +196,8 @@ func stopServer() error {
 	return fmt.Errorf("daemon (pid %d) did not stop within %s", pid, stopTimeout)
 }
 
-// runServe is the daemon body: the same polling loop as the TUI, minus every
-// terminal concern, publishing only the tmux status strip.
+// runServe is the daemon body: the polling loop, publishing the tmux status
+// strip and streaming every poll to the dashboards connected to its socket.
 func runServe() error {
 	lock, err := lockPidFile()
 	if err != nil {
@@ -187,6 +213,12 @@ func runServe() error {
 		return err
 	}
 
+	ln, err := listen()
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+
 	log.SetFlags(log.LstdFlags)
 	log.Printf("cc-watch daemon started (pid %d)", os.Getpid())
 
@@ -196,8 +228,17 @@ func runServe() error {
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
 
-	update(ctx)
-	updateStatusBar(ctx)
+	// The first poll runs before any client is accepted, so the first
+	// snapshot a dashboard receives is already a full one. Clients that dial
+	// meanwhile wait in the listen backlog.
+	h := newHub()
+	poll := func() {
+		update(ctx)
+		updateStatusBar(ctx)
+		h.publish(encodeSnapshot(takeSnapshot()))
+	}
+	poll()
+	go h.serve(ln)
 
 	for {
 		select {
@@ -206,8 +247,7 @@ func runServe() error {
 			log.Printf("cc-watch daemon stopped")
 			return nil
 		case <-ticker.C:
-			update(ctx)
-			updateStatusBar(ctx)
+			poll()
 		}
 	}
 }
