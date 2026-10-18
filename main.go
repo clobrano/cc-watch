@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -238,7 +239,7 @@ var (
 
 func main() {
 	serve := flag.Bool("serve", false,
-		"run in the background as a daemon, publishing only the tmux status strip (no dashboard)")
+		"start the background daemon that polls tmux, publishes the status strip and serves dashboards (no dashboard of its own)")
 	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
 	doctor := flag.Bool("doctor", false,
 		"report what cc-watch sees in every tmux pane, and why each was or was not taken for an agent")
@@ -280,11 +281,38 @@ func main() {
 		return
 	}
 
-	runTUI()
+	if err := runTUI(); err != nil {
+		fmt.Fprintln(os.Stderr, "cc-watch:", err)
+		os.Exit(1)
+	}
 }
 
-func runTUI() {
+// runTUI is the dashboard. It does no polling of its own: it connects to the
+// daemon, starting one if none is running, and renders the snapshots the
+// daemon streams — so it shows the current state on its first frame, and any
+// number of dashboards share one poller.
+func runTUI() error {
+	conn, err := connectDaemon()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	snaps := make(chan snapshot, 1)
+	go readSnapshots(conn, snaps)
+	// The daemon sends its latest snapshot on connect; wait for it so the first
+	// frame is the real state rather than a flash of "no agent sessions".
+	select {
+	case snap, ok := <-snaps:
+		if !ok {
+			return errors.New("daemon closed the connection")
+		}
+		applySnapshot(snap)
+	case <-time.After(stopTimeout):
+		return errors.New("daemon sent no status")
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	// Use /dev/tty for terminal operations so they work regardless of how
 	// stdin/stdout are connected (e.g. inside tmux, under wrappers, etc.).
@@ -300,14 +328,9 @@ func runTUI() {
 	}
 	termWidth = queryWidth(fd)
 
+	// The status strip is left alone on the way out: the daemon publishes it,
+	// and keeps running after the dashboard quits.
 	defer func() {
-		cancel()
-		// Leave the strip alone if a daemon is also publishing it: unsetting
-		// the option here would blank the status bar until the daemon's next
-		// *change* of value, which may be minutes away.
-		if !daemonRunning() {
-			clearStatusBar()
-		}
 		if rawState != nil {
 			term.Restore(fd, rawState)
 		}
@@ -325,26 +348,23 @@ func runTUI() {
 	fmt.Print("\033[?1049h\033[?25l") // enter alternate screen, hide cursor
 
 	selected := 0
-	ticker := time.NewTicker(refreshInterval)
-	defer ticker.Stop()
-
-	update(ctx)
-	updateStatusBar(ctx)
 	render(selected)
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 
 		case <-winch:
 			termWidth = queryWidth(fd)
 			fmt.Print("\033[2J")
 			render(selected)
 
-		case <-ticker.C:
-			update(ctx)
-			updateStatusBar(ctx)
+		case snap, ok := <-snaps:
+			if !ok {
+				return errors.New("lost connection to the daemon")
+			}
+			applySnapshot(snap)
 			names := sortedNames()
 			if selected >= len(names) && len(names) > 0 {
 				selected = len(names) - 1
@@ -354,7 +374,7 @@ func runTUI() {
 		case k := <-keys:
 			switch k {
 			case keyQuit:
-				return
+				return nil
 
 			case keyUp:
 				if selected > 0 {
@@ -375,8 +395,6 @@ func runTUI() {
 					break
 				}
 				attach(ctx, fd, names[selected], &rawState)
-				update(ctx)
-				updateStatusBar(ctx)
 				render(selected)
 			}
 		}

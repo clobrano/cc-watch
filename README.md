@@ -23,7 +23,7 @@ lets you jump straight to the one that needs you.
 
 ## How it works
 
-Every 2 seconds `cc-watch` runs `tmux list-panes -a` to enumerate every pane in
+Every 2 seconds the cc-watch daemon (see [Daemon mode](#daemon-mode)) runs `tmux list-panes -a` to enumerate every pane in
 every session, keeps the ones running a configured agent (`claude`, `codex`,
 `gemini`, `opencode` and `pi` by default), and inspects each of them:
 
@@ -179,18 +179,24 @@ Attaching adapts to where you are running from:
 The TUI uses the alternate screen buffer, so your scrollback is left intact, and it
 adapts to terminal resizes.
 
+The dashboard does no polling of its own: it is a client of the
+[daemon](#daemon-mode), and if none is running it starts one first. It receives
+the daemon's current view the moment it connects, so it opens on the real state
+rather than a screen of `...` rows, and any number of dashboards can be open at
+once on the same poller. Quitting a dashboard leaves the daemon running.
+
 ### Flags
 
 | Flag            | Action                                                                  |
 | --------------- | ----------------------------------------------------------------------- |
-| _(none)_        | Run the interactive dashboard                                           |
-| `--serve`       | Start the background daemon: [tmux status bar](#tmux-status-bar) only, no dashboard |
+| _(none)_        | Run the interactive dashboard, starting the daemon if it is not running |
+| `--serve`       | Start the background [daemon](#daemon-mode) without opening a dashboard |
 | `--stop-server` | Stop the running daemon                                                 |
 | `--doctor`      | Report what cc-watch sees in every pane, then exit — see [Troubleshooting](#troubleshooting) |
 
 ## tmux status bar
 
-While it runs, cc-watch publishes a compact strip of every agent it has found to
+While it runs, the cc-watch daemon publishes a compact strip of every agent it has found to
 the tmux user option `@cc_watch_agents` — one number per agent, coloured by the
 same states as the dashboard. It is nothing but an option until you reference it,
 so add it wherever you want in your `.tmux.conf`:
@@ -232,12 +238,12 @@ on a session.
 
 The strip is pushed on each 2-second poll, but the option is only rewritten (and
 clients only redrawn, via `refresh-client -S`) when the rendered string actually
-changes. On exit cc-watch unsets the option, so a frozen strip never lingers in
-your status bar — which also means the indicator is live only while cc-watch is
-running. To keep it live without keeping the dashboard open, run the daemon
-described in [Daemon mode](#daemon-mode).
+changes. When the daemon stops it unsets the option, so a frozen strip never
+lingers in your status bar — which also means the indicator is live only while the
+daemon is running. Opening the dashboard once starts it; to have it from the
+moment tmux comes up, see [Daemon mode](#daemon-mode).
 
-To check the strip is live while cc-watch is running, read the raw option:
+To check the strip is live while the daemon is running, read the raw option:
 
 ```sh
 $ tmux show-options -gqv @cc_watch_agents
@@ -253,10 +259,10 @@ Empty output means either cc-watch is not running or it found no agents.
 
 ## Daemon mode
 
-The status strip needs a long-running process behind it, but it does not need the
-dashboard. `--serve` starts cc-watch in the background with the tmux support only:
-the same 2-second poll and the same `@cc_watch_agents` option, no TUI, no terminal
-of its own.
+All the polling happens in one background process, the daemon. It publishes the
+tmux status strip and serves every open dashboard over a Unix socket. Running
+`cc-watch` starts it on demand; `--serve` starts it without opening a dashboard,
+which is all the status strip needs.
 
 ```sh
 $ cc-watch --serve
@@ -266,8 +272,8 @@ cc-watch daemon stopped (pid 48213)
 ```
 
 `--serve` re-executes cc-watch in a new session (`setsid`), so the daemon outlives
-the shell that started it, and returns only once the child is actually up — if it
-fails to start you get an error instead of a silent no-op. `--stop-server` sends
+the shell that started it, and returns only once the child is accepting
+connections — if it fails to start you get an error instead of a silent no-op. `--stop-server` sends
 `SIGTERM` and waits for it to exit; the daemon unsets `@cc_watch_agents` on the way
 out, so the strip disappears with it.
 
@@ -283,9 +289,16 @@ run-shell -b 'cc-watch --serve'
 `-b` keeps tmux from blocking on it, and starting it twice is harmless — the
 second call sees the first daemon and exits.
 
-The daemon and the dashboard can run at the same time — they compute the same
-strip from the same tmux state, so they agree, and quitting the TUI leaves the
-daemon's strip alone rather than clearing it.
+Dashboards connect to the daemon's socket and receive one JSON snapshot per
+line: the latest one immediately on connect, then a fresh one after every poll.
+The stream is one-way and fans out to every client, so ten open dashboards cost
+tmux no more than one. A dashboard that stops reading is dropped after a few
+seconds rather than holding the daemon up. If the daemon goes away underneath a
+dashboard, the dashboard exits with `lost connection to the daemon`.
+
+After upgrading cc-watch, restart a daemon left over from an older build with
+`cc-watch --stop-server`: one that predates dashboard support has no socket, and
+the dashboard says so rather than starting a second poller beside it.
 
 State lives in `$XDG_RUNTIME_DIR/cc-watch/` (falling back to
 `$TMPDIR/cc-watch-$UID/`):
@@ -293,6 +306,7 @@ State lives in `$XDG_RUNTIME_DIR/cc-watch/` (falling back to
 | File         | Contents                                                          |
 | ------------ | ----------------------------------------------------------------- |
 | `daemon.pid` | The daemon's pid, and the lock file that makes "running" knowable  |
+| `daemon.sock` | The socket dashboards connect to                                  |
 | `daemon.log` | Daemon start/stop lines — the first place to look if `--serve` fails |
 
 Liveness is an advisory lock (`flock`) on the pid file, not the pid itself. The
