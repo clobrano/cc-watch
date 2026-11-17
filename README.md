@@ -19,6 +19,12 @@ lets you jump straight to the one that needs you.
     CX api:1.0                waiting    why is the integration suite flaky?
     CL docs                   idle       document the new --serve flag
     GM scratch                error      $
+
+    ── GM api:0.1 ─────────────────────────────────────────────────────────────
+    ● Edited src/search/handler.go (+42 −3)
+    ╭────────────────────────────────────────────────────────────────────╮
+    │ >                                                                  │
+    ╰────────────────────────────────────────────────────────────────────╯
 ```
 
 ## How it works
@@ -167,7 +173,16 @@ cc-watch
 | --------------- | ------------------------- |
 | `↑` / `↓`       | Move the selection        |
 | `↵` (Enter)     | Attach to the selected pane's session |
+| `p`             | Show or hide the preview  |
 | `q` / `Ctrl-C`  | Quit                      |
+
+Below the list, the dashboard previews the last lines of the selected pane (30
+by default, see `preview_lines`), input box and footer included. An empty input
+box at the bottom is the quickest way to tell that an agent is done. The preview
+shrinks to fit the terminal height, and is left out when fewer than 3 lines fit.
+
+The session column widens to fit the longest name, from 24 up to 40 columns, but
+never so far that the prompt column drops below 30 columns.
 
 Attaching adapts to where you are running from:
 
@@ -398,6 +413,7 @@ Configuration is optional. To override the defaults, create
 {
   "agent_commands": ["claude", "codex", "gemini", "opencode", "pi", "aider"],
   "agent_icons": { "aider": "a" },
+  "preview_lines": 30,
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
@@ -406,6 +422,7 @@ Configuration is optional. To override the defaults, create
 | ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `agent_commands` | `["claude", "codex", "gemini", "opencode", "pi"]` | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
 | `agent_icons`    | `{"claude": "CL", "codex": "CX", "gemini": "GM", "opencode": "OC", "pi": "PI"}` | The mark shown before a session name, per agent. Two-letter ASCII codes by default, so the rows line up in any terminal; set any string (a glyph, a single letter) to override. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no mark of its own gets its uppercased initial. |
+| `preview_lines`  | `30`                                 | How many of the selected pane's last lines the preview shows, at most 60. The terminal height can show fewer. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

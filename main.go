@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/term"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,7 +18,6 @@ import (
 	"syscall"
 	"time"
 	"unicode"
-	"golang.org/x/term"
 )
 
 const (
@@ -44,6 +44,14 @@ const (
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
 	statusOption = "@cc_watch_agents"
+
+	// tailLines is how many trailing lines of each pane the daemon ships to
+	// dashboards for the preview. It is the ceiling for preview_lines.
+	tailLines = 60
+
+	// defaultPreviewLines is how much of the selected pane the preview shows
+	// when preview_lines is not configured (and the terminal is tall enough).
+	defaultPreviewLines = 30
 )
 
 // Config is loaded from ~/.config/cc-watch/config.json.
@@ -60,6 +68,9 @@ type Config struct {
 	// the escape hatch for a terminal that renders the defaults at double
 	// width: give the agent an ASCII icon such as "c".
 	AgentIcons map[string]string `json:"agent_icons"`
+	// PreviewLines is how many of the selected pane's last lines are shown
+	// below the list. The terminal height can show fewer; 0 means the default.
+	PreviewLines int `json:"preview_lines"`
 }
 
 // defaultAgentIcons are the two-letter marks the agents are known by: CL for
@@ -143,11 +154,23 @@ func loadConfig() Config {
 	return c
 }
 
+// previewLines is the configured preview depth, defaulted and capped at what
+// the daemon sends.
+func (c Config) previewLines() int {
+	switch {
+	case c.PreviewLines <= 0:
+		return defaultPreviewLines
+	case c.PreviewLines > tailLines:
+		return tailLines
+	}
+	return c.PreviewLines
+}
+
 type State int
 
 const (
-	StateUnknown State = iota
-	StateStarting // first poll, not yet classified
+	StateUnknown  State = iota
+	StateStarting       // first poll, not yet classified
 	StateActive
 	StateIdle
 	StateWaiting
@@ -211,6 +234,7 @@ func (s State) color() string {
 var (
 	ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07]*\x07|[PX^_][^\x1b]*\x1b\\|.)`)
 	termWidth  = 80 // updated from terminal on start and on SIGWINCH
+	termHeight = 24
 )
 
 type session struct {
@@ -221,15 +245,17 @@ type session struct {
 	prompt     string
 	lastChange time.Time
 	lastPane   string
+	tail       []string // last lines of the pane, for the dashboard preview
 }
 
 type keyEvent int
 
 const (
-	keyUp    keyEvent = -1
-	keyDown  keyEvent = -2
-	keyEnter keyEvent = -3
-	keyQuit  keyEvent = -4
+	keyUp      keyEvent = -1
+	keyDown    keyEvent = -2
+	keyEnter   keyEvent = -3
+	keyQuit    keyEvent = -4
+	keyPreview keyEvent = -5
 )
 
 var (
@@ -326,7 +352,7 @@ func runTUI() error {
 	if term.IsTerminal(fd) {
 		rawState, _ = term.MakeRaw(fd)
 	}
-	termWidth = queryWidth(fd)
+	termWidth, termHeight = querySize(fd)
 
 	// The status strip is left alone on the way out: the daemon publishes it,
 	// and keeps running after the dashboard quits.
@@ -348,6 +374,8 @@ func runTUI() error {
 	fmt.Print("\033[?1049h\033[?25l") // enter alternate screen, hide cursor
 
 	selected := 0
+	preview := true
+	render := func(selected int) { renderDashboard(selected, preview) }
 	render(selected)
 
 	for {
@@ -356,7 +384,7 @@ func runTUI() error {
 			return nil
 
 		case <-winch:
-			termWidth = queryWidth(fd)
+			termWidth, termHeight = querySize(fd)
 			fmt.Print("\033[2J")
 			render(selected)
 
@@ -375,6 +403,10 @@ func runTUI() error {
 			switch k {
 			case keyQuit:
 				return nil
+
+			case keyPreview:
+				preview = !preview
+				render(selected)
 
 			case keyUp:
 				if selected > 0 {
@@ -427,14 +459,17 @@ func attach(ctx context.Context, fd int, key string, rawState **term.State) {
 	fmt.Print("\033[?1049h\033[?25l") // re-enter alt screen, hide cursor
 }
 
-// queryWidth tries multiple fds to get the terminal width reliably.
-func queryWidth(fd int) int {
+// querySize tries multiple fds to get the terminal size reliably.
+func querySize(fd int) (int, int) {
 	for _, f := range []int{fd, int(os.Stdout.Fd()), int(os.Stderr.Fd())} {
-		if w, _, err := term.GetSize(f); err == nil && w > 10 {
-			return w
+		if w, h, err := term.GetSize(f); err == nil && w > 10 {
+			if h <= 0 {
+				h = 24
+			}
+			return w, h
 		}
 	}
-	return 80
+	return 80, 24
 }
 
 func readKeys(tty *os.File, ch chan<- keyEvent) {
@@ -461,6 +496,8 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 				ch <- keyEnter
 			case 'q', 'Q', 0x03 /* Ctrl-C */ :
 				ch <- keyQuit
+			case 'p', 'P':
+				ch <- keyPreview
 			}
 		}
 	}
@@ -813,20 +850,74 @@ func toDisplay(s string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// Column widths for the dashboard. prefixWidth is everything consumed before
-// the description column, derived from the others so that adding or resizing a
-// column cannot leave the description misaligned.
+// Column widths for the dashboard.
+//
+// The session column grows to fit the longest name, from minNameWidth up to
+// maxNameWidth, but never so far that the prompt column drops below
+// minDescWidth — on a narrow terminal it gives the columns back, down to
+// minNameWidth.
 //
 // Using ASCII ">" for the pointer — unicode triangles render as 2-column wide
 // glyphs in most terminals, which breaks column alignment.
 const (
-	nameWidth   = 24
-	stateWidth  = 9
-	gap         = 2
-	prefixWidth = 2 + 2 + nameWidth + gap + stateWidth + gap
+	minNameWidth = 24
+	maxNameWidth = 40
+	minDescWidth = 30
+	stateWidth   = 9
+	gap          = 2
+	rightMargin  = 3 // keeps lines from touching the edge
 )
 
-func render(selected int) {
+// prefixWidth is everything consumed before the description column, derived
+// from the others so that adding or resizing a column cannot leave the
+// description misaligned.
+func prefixWidth(nameWidth int) int {
+	return 2 + 2 + nameWidth + gap + stateWidth + gap
+}
+
+// nameColumnWidth sizes the session column for the given display names on a
+// terminal w columns wide.
+func nameColumnWidth(names []string, w int) int {
+	nw := minNameWidth
+	for _, n := range names {
+		if l := len([]rune(n)); l > nw {
+			nw = l
+		}
+	}
+	if nw > maxNameWidth {
+		nw = maxNameWidth
+	}
+	if fit := w - prefixWidth(0) - rightMargin - minDescWidth; nw > fit {
+		nw = fit
+	}
+	if nw < minNameWidth {
+		nw = minNameWidth
+	}
+	return nw
+}
+
+// displayNames are the session-column labels, in sortedNames order: the agent
+// icon, then the tmux session name, or the full "session:W.P" key when that
+// session has more than one agent pane.
+func displayNames(names []string) []string {
+	sessionCount := map[string]int{}
+	for _, key := range names {
+		sessionCount[strings.SplitN(key, ":", 2)[0]]++
+	}
+	out := make([]string, len(names))
+	for i, key := range names {
+		name := strings.SplitN(key, ":", 2)[0]
+		if sessionCount[name] > 1 {
+			name = key
+		}
+		// The icon rides inside the session column rather than taking a
+		// column of its own, which would cost the prompt column ten chars.
+		out[i] = agentIcon(sessions[key].agent) + " " + name
+	}
+	return out
+}
+
+func renderDashboard(selected int, preview bool) {
 	const (
 		reset = "\033[0m"
 		bold  = "\033[1m"
@@ -834,15 +925,19 @@ func render(selected int) {
 	)
 
 	// Re-query on every render so a wrong initial value self-corrects within one cycle.
-	if fresh := queryWidth(int(os.Stdout.Fd())); fresh > 10 {
-		termWidth = fresh
+	if fw, fh := querySize(int(os.Stdout.Fd())); fw > 10 {
+		termWidth, termHeight = fw, fh
 	}
+	names := sortedNames()
+	labels := displayNames(names)
+
 	w := termWidth
-	if w < prefixWidth+10 {
-		w = prefixWidth + 10
+	nameWidth := nameColumnWidth(labels, w)
+	if w < prefixWidth(nameWidth)+10 {
+		w = prefixWidth(nameWidth) + 10
 	}
-	descWidth := w - prefixWidth - 3 // 3-char right margin keeps lines from touching the edge
-	sepWidth := w - 5                // indent(4) + 1 right margin
+	descWidth := w - prefixWidth(nameWidth) - rightMargin
+	sepWidth := w - 5 // indent(4) + 1 right margin
 
 	var b strings.Builder
 	b.WriteString("\033[2J\033[H") // clear entire screen, go home
@@ -853,29 +948,14 @@ func render(selected int) {
 	fmt.Fprintf(&b, "    %s%-*s  %-*s  %s%s\n", bold,
 		nameWidth, "SESSION", stateWidth, "STATE", "LAST PROMPT", reset)
 	fmt.Fprintf(&b, "    %s\n", strings.Repeat("─", sepWidth))
+	used := 4 // title, blank, header, rule
 
-	names := sortedNames()
 	if len(names) == 0 {
 		fmt.Fprintf(&b, "\n  %sno agent sessions found%s\n", dim, reset)
+		used += 2
 	} else {
-		// Count agent panes per session; if >1, display the full "session:W.P" key.
-		sessionCount := map[string]int{}
-		for _, key := range names {
-			sname := strings.SplitN(key, ":", 2)[0]
-			sessionCount[sname]++
-		}
-
 		for i, key := range names {
 			s := sessions[key]
-			sname := strings.SplitN(key, ":", 2)[0]
-			displayName := sname
-			if sessionCount[sname] > 1 {
-				displayName = key
-			}
-			// The icon rides inside the session column rather than taking a
-			// column of its own, which would cost the prompt column ten chars.
-			displayName = agentIcon(s.agent) + " " + displayName
-
 			pointer := "  "
 			nameStyle := dim
 			if i == selected {
@@ -892,18 +972,113 @@ func render(selected int) {
 			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
 			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%s%s\n",
 				pointer,
-				nameStyle, nameWidth, truncate(displayName, nameWidth), reset,
+				nameStyle, nameWidth, truncate(labels[i], nameWidth), reset,
 				s.state.color(), stateWidth, s.state.label(), reset,
 				dim, truncate(text, descWidth), reset,
 			)
 		}
+		used += len(names)
 	}
 
-	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   q quit%s\n", dim, reset)
+	// The preview takes whatever height the list and the footer leave, up to
+	// preview_lines: blank + titled rule above it, blank + help line below, and
+	// the line the cursor lands on after the help line.
+	if preview && selected < len(names) {
+		avail := termHeight - used - 5
+		if n := min(cfg.previewLines(), avail); n >= 3 {
+			s := sessions[names[selected]]
+			title := "── " + labels[selected] + " "
+			fmt.Fprintf(&b, "\n    %s%s%s%s\n", dim,
+				truncate(title, sepWidth),
+				strings.Repeat("─", max(0, sepWidth-len([]rune(title)))), reset)
+			tail := s.tail
+			if len(tail) > n {
+				tail = tail[len(tail)-n:]
+			}
+			if len(tail) == 0 {
+				fmt.Fprintf(&b, "    %s(no output captured yet)%s\n", dim, reset)
+			}
+			for _, l := range tail {
+				fmt.Fprintf(&b, "    %s%s\n", clipColumns(l, sepWidth), reset)
+			}
+		}
+	}
+
+	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   p preview   q quit%s\n", dim, reset)
 	b.WriteString("\033[J")
 
 	// raw mode clears OPOST/ONLCR so \n no longer implies \r; use \r\n explicitly.
 	fmt.Print(strings.ReplaceAll(b.String(), "\n", "\r\n"))
+}
+
+// paneTail is the last n lines of a capture, cleaned for the preview: ANSI
+// escapes stripped, tabs expanded, other control characters blanked and
+// trailing blanks trimmed. Box drawing is kept — the agent's input box at the
+// bottom is the clearest sign of whether it is done.
+func paneTail(pane string, n int) []string {
+	if strings.TrimSpace(pane) == "" {
+		return nil
+	}
+	lines := paneText(pane)
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		var b strings.Builder
+		col := 0
+		for _, r := range l {
+			switch {
+			case r == '\t':
+				pad := 8 - col%8
+				b.WriteString(strings.Repeat(" ", pad))
+				col += pad
+				continue
+			case unicode.IsControl(r):
+				r = ' '
+			}
+			b.WriteRune(r)
+			col += runeColumns(r)
+		}
+		out[i] = strings.TrimRight(b.String(), " ")
+	}
+	return out
+}
+
+// clipColumns cuts s to at most n terminal columns, counting wide glyphs as
+// two, so a preview line can never wrap and push the screen around.
+func clipColumns(s string, n int) string {
+	col := 0
+	for i, r := range s {
+		cw := runeColumns(r)
+		if col+cw > n {
+			return s[:i]
+		}
+		col += cw
+	}
+	return s
+}
+
+// runeColumns is how many terminal columns r takes: 0 for combining marks, 2
+// for East Asian wide glyphs and emoji, 1 otherwise. It is an approximation of
+// wcwidth, enough to keep preview lines inside the screen.
+func runeColumns(r rune) int {
+	switch {
+	case unicode.Is(unicode.Mn, r), r == 0x200B, r == 0x200D, r >= 0xFE00 && r <= 0xFE0F:
+		return 0
+	case r >= 0x1100 && r <= 0x115F,
+		r >= 0x2E80 && r <= 0xA4CF && r != 0x303F,
+		r >= 0xAC00 && r <= 0xD7A3,
+		r >= 0xF900 && r <= 0xFAFF,
+		r >= 0xFE30 && r <= 0xFE4F,
+		r >= 0xFF00 && r <= 0xFF60,
+		r >= 0xFFE0 && r <= 0xFFE6,
+		r >= 0x1F300 && r <= 0x1F64F,
+		r >= 0x1F900 && r <= 0x1FAFF,
+		r >= 0x20000 && r <= 0x3FFFD:
+		return 2
+	}
+	return 1
 }
 
 // updateStatusBar publishes a numbered, state-coloured strip of the detected

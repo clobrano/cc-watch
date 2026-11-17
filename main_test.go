@@ -181,7 +181,7 @@ func TestTruncateCountsRunesNotBytes(t *testing.T) {
 
 	// The same applies to a session name, which always carries a three-byte
 	// agent icon in its first column.
-	if got := truncate("✻ notes", nameWidth); got != "✻ notes" {
+	if got := truncate("✻ notes", minNameWidth); got != "✻ notes" {
 		t.Errorf("truncate shortened a name that fits: %q", got)
 	}
 	if got, want := truncate("✻ abcdefghij", 8), "✻ abc..."; got != want {
@@ -394,5 +394,50 @@ func TestDefaultIconsAreASCII(t *testing.T) {
 				t.Errorf("icon for %s (%q) has non-ASCII rune %U; marks must be ASCII to stay one column wide", agent, icon, r)
 			}
 		}
+	}
+}
+
+func TestNameColumnWidth(t *testing.T) {
+	long := strings.Repeat("x", 60)
+	cases := []struct {
+		names []string
+		w     int
+		want  int
+	}{
+		{[]string{"CL notes"}, 120, minNameWidth},                                      // short names keep the minimum
+		{[]string{"CL " + strings.Repeat("a", 30)}, 120, 33},                           // grows to fit
+		{[]string{"CL " + long}, 200, maxNameWidth},                                    // capped
+		{[]string{"CL " + long}, 80, 80 - prefixWidth(0) - rightMargin - minDescWidth}, // leaves the prompt room
+		{[]string{"CL " + long}, 40, minNameWidth},                                     // never below the minimum
+	}
+	for _, c := range cases {
+		if got := nameColumnWidth(c.names, c.w); got != c.want {
+			t.Errorf("nameColumnWidth(%q, %d) = %d, want %d", c.names, c.w, got, c.want)
+		}
+	}
+}
+
+func TestPaneTail(t *testing.T) {
+	pane := "one\n\x1b[31mtwo\x1b[0m\tx\n╭────╮\n│ >  │\n╰────╯\n\n\n"
+	got := paneTail(pane, 4)
+	want := []string{"two     x", "╭────╮", "│ >  │", "╰────╯"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("paneTail = %q, want %q", got, want)
+	}
+	if got := paneTail("  \n\n", 4); got != nil {
+		t.Errorf("paneTail of a blank pane = %q, want nil", got)
+	}
+}
+
+func TestClipColumns(t *testing.T) {
+	if got := clipColumns("hello", 3); got != "hel" {
+		t.Errorf("clipColumns = %q", got)
+	}
+	// A wide glyph that would straddle the edge is dropped whole.
+	if got := clipColumns("ab漢字", 3); got != "ab" {
+		t.Errorf("clipColumns wide = %q", got)
+	}
+	if got := clipColumns("│ > │", 10); got != "│ > │" {
+		t.Errorf("clipColumns box = %q", got)
 	}
 }
