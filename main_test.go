@@ -310,6 +310,8 @@ func TestClassify(t *testing.T) {
 		{"claude settled at its prompt", claudePane, "", stale, StateWaiting},
 		{"prompt on screen but still typing out", claudePane, "", fresh, StateActive},
 		{"spinner in title", geminiPane, "⠋ Working", fresh, StateActive},
+		{"stale spinner frame over a settled prompt", geminiPane, "⠋ Working", stale, StateWaiting},
+		{"stale spinner frame over dead output", "Editing src/parser.go", "⠋ Working", stale, StateIdle},
 		{"output still moving", "Editing src/parser.go", "", fresh, StateActive},
 		{"output stopped", "Editing src/parser.go", "", stale, StateIdle},
 		{"agent exited to the shell", geminiPane + "\nuser@host:~/project$ ", "", stale, StateError},

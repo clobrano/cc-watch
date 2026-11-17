@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/term"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,7 +18,6 @@ import (
 	"syscall"
 	"time"
 	"unicode"
-	"golang.org/x/term"
 )
 
 const (
@@ -146,8 +146,8 @@ func loadConfig() Config {
 type State int
 
 const (
-	StateUnknown State = iota
-	StateStarting // first poll, not yet classified
+	StateUnknown  State = iota
+	StateStarting       // first poll, not yet classified
 	StateActive
 	StateIdle
 	StateWaiting
@@ -221,6 +221,7 @@ type session struct {
 	prompt     string
 	lastChange time.Time
 	lastPane   string
+	lastTitle  string
 }
 
 type keyEvent int
@@ -542,9 +543,13 @@ func update(ctx context.Context) {
 		title, _ := tmux(ctx, "display-message", "-p", "-t", target, "#{pane_title}")
 		pane, _ := capture(ctx, target, paneLines)
 
-		if pane != s.lastPane {
+		// The title joins the change check because classify keys on it: a live
+		// spinner animates its frames, a stale one freezes, and only a changing
+		// title keeps that pane Active.
+		if pane != s.lastPane || title != s.lastTitle {
 			s.lastChange = time.Now()
 			s.lastPane = pane
+			s.lastTitle = title
 		}
 
 		s.state = classify(pane, strings.TrimSpace(title), s.lastChange)
@@ -565,10 +570,15 @@ func update(ctx context.Context) {
 }
 
 func classify(pane, title string, lastChange time.Time) State {
-	// Braille spinner in the OSC title = Claude Code actively working.
+	// Braille spinner in the OSC title = Claude Code actively working. A live
+	// spinner animates its frames, so a recent change (pane or title) backs the
+	// claim; a spinner frozen past idleThreshold is a stale frame left after a
+	// hang or crash, and the pane rules below decide instead.
 	if t := strings.TrimSpace(title); t != "" {
 		if r := []rune(t)[0]; r >= 0x2800 && r <= 0x28FF {
-			return StateActive
+			if time.Since(lastChange) < idleThreshold {
+				return StateActive
+			}
 		}
 	}
 
