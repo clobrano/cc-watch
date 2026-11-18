@@ -51,7 +51,7 @@ func takeSnapshot() snapshot {
 		s := sessions[key]
 		snap.Sessions = append(snap.Sessions, snapshotRow{
 			Name: s.name, Agent: s.agent, State: s.state, Prompt: s.prompt, Desc: s.desc,
-			Tail: paneTail(s.lastPane, tailLines),
+			Tail: paneTail(s.colorPane, tailLines),
 		})
 	}
 	return snap

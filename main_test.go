@@ -422,7 +422,7 @@ func TestNameColumnWidth(t *testing.T) {
 func TestPaneTail(t *testing.T) {
 	pane := "one\n\x1b[31mtwo\x1b[0m\tx\n╭────╮\n│ >  │\n╰────╯\n\n\n"
 	got := paneTail(pane, 4)
-	want := []string{"two     x", "╭────╮", "│ >  │", "╰────╯"}
+	want := []string{"\x1b[31mtwo\x1b[0m     x", "╭────╮", "│ >  │", "╰────╯"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("paneTail = %q, want %q", got, want)
 	}
@@ -441,5 +441,32 @@ func TestClipColumns(t *testing.T) {
 	}
 	if got := clipColumns("│ > │", 10); got != "│ > │" {
 		t.Errorf("clipColumns box = %q", got)
+	}
+}
+
+func TestPaneTailColors(t *testing.T) {
+	// A colour left open at a line break is carried onto the next line; a
+	// reset ends it; non-SGR escapes are dropped.
+	pane := "\x1b[1;32mgreen\nstill\x1b[0m\nplain\x1b]0;title\x07\n"
+	got := paneTail(pane, 3)
+	want := []string{"\x1b[1;32mgreen", "\x1b[1;32mstill\x1b[0m", "plain"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("paneTail = %q, want %q", got, want)
+	}
+	// The carry is worked out from lines above the window too.
+	if got := paneTail(pane, 1); len(got) != 1 || got[0] != "plain" {
+		t.Errorf("paneTail(1) = %q", got)
+	}
+	if got := paneTail("\x1b[31mred\nmore", 1); got[0] != "\x1b[31mmore" {
+		t.Errorf("carry into window = %q", got)
+	}
+}
+
+func TestClipColumnsSkipsEscapes(t *testing.T) {
+	if got := clipColumns("\x1b[31mhello\x1b[0m", 3); got != "\x1b[31mhel" {
+		t.Errorf("clipColumns = %q", got)
+	}
+	if got := clipColumns("\x1b[31mhi\x1b[0m", 5); got != "\x1b[31mhi\x1b[0m" {
+		t.Errorf("clipColumns kept = %q", got)
 	}
 }

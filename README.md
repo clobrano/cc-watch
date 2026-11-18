@@ -20,11 +20,11 @@ lets you jump straight to the one that needs you.
     CL docs                   idle       document the new --serve flag
     GM scratch                error      $
 
-    ── GM api:0.1 ─────────────────────────────────────────────────────────────
-    ● Edited src/search/handler.go (+42 −3)
-    ╭────────────────────────────────────────────────────────────────────╮
-    │ >                                                                  │
-    ╰────────────────────────────────────────────────────────────────────╯
+  ━━ GM api:0.1 · waiting ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  │ ● Edited src/search/handler.go (+42 −3)
+  │ ╭──────────────────────────────────────────────────────────────────╮
+  │ │ >                                                                │
+  │ ╰──────────────────────────────────────────────────────────────────╯
 ```
 
 ## How it works
@@ -177,8 +177,10 @@ cc-watch
 | `q` / `Ctrl-C`  | Quit                      |
 
 Below the list, the dashboard previews the last lines of the selected pane (30
-by default, see `preview_lines`), input box and footer included. An empty input
-box at the bottom is the quickest way to tell that an agent is done. The preview
+by default, see `preview_lines`), input box and footer included, in the pane's
+own colours. An empty input box at the bottom is the quickest way to tell that an
+agent is done. The preview's rule and left gutter take the colour of the selected
+row's state, which sets it apart from the list. The preview
 shrinks to fit the terminal height, and is left out when fewer than 3 lines fit.
 
 The session column widens to fit the longest name, from 24 up to 40 columns, but

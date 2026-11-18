@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -232,7 +233,7 @@ func (s State) color() string {
 }
 
 var (
-	ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07]*\x07|[PX^_][^\x1b]*\x1b\\|.)`)
+	ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-9;:?]*[a-zA-Z]|\][^\x07]*\x07|[PX^_][^\x1b]*\x1b\\|.)`)
 	termWidth  = 80 // updated from terminal on start and on SIGWINCH
 	termHeight = 24
 )
@@ -245,6 +246,7 @@ type session struct {
 	prompt     string
 	lastChange time.Time
 	lastPane   string
+	colorPane  string // lastPane as captured, colours included, for the preview
 	lastTitle  string
 	tail       []string // last lines of the pane, for the dashboard preview
 }
@@ -559,8 +561,9 @@ func update(ctx context.Context) {
 
 		s, ok := sessions[key]
 		if !ok {
-			pane, _ := capture(ctx, target, paneLines)
-			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting, lastPane: pane}
+			color, _ := captureColor(ctx, target, paneLines)
+			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting,
+				lastPane: stripANSI(color), colorPane: color}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
 			// newer one.
@@ -578,7 +581,11 @@ func update(ctx context.Context) {
 		}
 
 		title, _ := tmux(ctx, "display-message", "-p", "-t", target, "#{pane_title}")
-		pane, _ := capture(ctx, target, paneLines)
+		// The colours are only for the preview: everything below reads the
+		// plain text, as it did before colours were captured.
+		color, _ := captureColor(ctx, target, paneLines)
+		pane := stripANSI(color)
+		s.colorPane = color
 
 		// The title joins the change check because classify keys on it: a live
 		// spinner animates its frames, a stale one freezes, and only a changing
@@ -997,19 +1004,23 @@ func renderDashboard(selected int, preview bool) {
 		avail := termHeight - used - 5
 		if n := min(cfg.previewLines(), avail); n >= 3 {
 			s := sessions[names[selected]]
-			title := "── " + labels[selected] + " "
-			fmt.Fprintf(&b, "\n    %s%s%s%s\n", dim,
-				truncate(title, sepWidth),
-				strings.Repeat("─", max(0, sepWidth-len([]rune(title)))), reset)
+			// A heavy rule and a gutter in the selected row's state colour
+			// set the preview apart from the list and tie it to its row.
+			accent := s.state.color()
+			title := truncate(labels[selected]+" · "+s.state.label(), max(0, sepWidth-5))
+			fmt.Fprintf(&b, "\n  %s━━ %s%s%s%s %s%s\n",
+				accent, bold, title, reset, accent,
+				strings.Repeat("━", max(0, sepWidth-len([]rune(title))-2)), reset)
+			gutter := "  " + accent + "│" + reset + " "
 			tail := s.tail
 			if len(tail) > n {
 				tail = tail[len(tail)-n:]
 			}
 			if len(tail) == 0 {
-				fmt.Fprintf(&b, "    %s(no output captured yet)%s\n", dim, reset)
+				fmt.Fprintf(&b, "%s%s(no output captured yet)%s\n", gutter, dim, reset)
 			}
 			for _, l := range tail {
-				fmt.Fprintf(&b, "    %s%s\n", clipColumns(l, sepWidth), reset)
+				fmt.Fprintf(&b, "%s%s%s\n", gutter, clipColumns(l, sepWidth-1), reset)
 			}
 		}
 	}
@@ -1021,23 +1032,55 @@ func renderDashboard(selected int, preview bool) {
 	fmt.Print(strings.ReplaceAll(b.String(), "\n", "\r\n"))
 }
 
-// paneTail is the last n lines of a capture, cleaned for the preview: ANSI
-// escapes stripped, tabs expanded, other control characters blanked and
-// trailing blanks trimmed. Box drawing is kept — the agent's input box at the
-// bottom is the clearest sign of whether it is done.
+// sgrEscape matches a Select Graphic Rendition sequence — colours and text
+// attributes — which is all capture-pane -e emits.
+var sgrEscape = regexp.MustCompile(`^\x1b\[[0-9;:]*m`)
+
+// paneTail is the last n lines of a capture, cleaned for the preview. Colours
+// (SGR sequences) are kept; every other escape is dropped, tabs are expanded,
+// other control characters blanked and trailing blank lines trimmed. Box
+// drawing is kept — the agent's input box at the bottom is the clearest sign of
+// whether it is done.
+//
+// Each line is printed on its own, followed by a reset, so it is given the
+// attributes still in effect from the lines above it: a colour that runs
+// across a line break looks the same in the preview as in the pane.
 func paneTail(pane string, n int) []string {
-	if strings.TrimSpace(pane) == "" {
+	lines := strings.Split(strings.ReplaceAll(pane, "\r", ""), "\n")
+	for len(lines) > 0 && strings.TrimSpace(stripANSI(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
 		return nil
 	}
-	lines := paneText(pane)
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	out := make([]string, len(lines))
+	first := max(0, len(lines)-n)
+	var carry string // SGR sequences in effect since the last reset
+	out := make([]string, 0, len(lines)-first)
 	for i, l := range lines {
 		var b strings.Builder
+		b.WriteString(carry)
 		col := 0
-		for _, r := range l {
+		for j := 0; j < len(l); {
+			if l[j] == 0x1b {
+				if m := sgrEscape.FindString(l[j:]); m != "" {
+					b.WriteString(m)
+					if m == "\x1b[m" || m == "\x1b[0m" {
+						carry = ""
+					} else {
+						carry += m
+					}
+					j += len(m)
+					continue
+				}
+				if m := ansiEscape.FindStringIndex(l[j:]); m != nil && m[0] == 0 {
+					j += m[1]
+					continue
+				}
+				j++
+				continue
+			}
+			r, size := utf8.DecodeRuneInString(l[j:])
+			j += size
 			switch {
 			case r == '\t':
 				pad := 8 - col%8
@@ -1050,21 +1093,30 @@ func paneTail(pane string, n int) []string {
 			b.WriteRune(r)
 			col += runeColumns(r)
 		}
-		out[i] = strings.TrimRight(b.String(), " ")
+		if i >= first {
+			out = append(out, strings.TrimRight(b.String(), " "))
+		}
 	}
 	return out
 }
 
 // clipColumns cuts s to at most n terminal columns, counting wide glyphs as
-// two, so a preview line can never wrap and push the screen around.
+// two and escape sequences as none, so a preview line can never wrap and push
+// the screen around.
 func clipColumns(s string, n int) string {
 	col := 0
-	for i, r := range s {
+	for i := 0; i < len(s); {
+		if m := sgrEscape.FindString(s[i:]); m != "" {
+			i += len(m)
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
 		cw := runeColumns(r)
 		if col+cw > n {
 			return s[:i]
 		}
 		col += cw
+		i += size
 	}
 	return s
 }
@@ -1176,6 +1228,17 @@ func lastNonEmptyLine(s string) string {
 // capture reads the last n lines of a pane, scrollback included.
 func capture(ctx context.Context, target string, n int) (string, error) {
 	return tmux(ctx, "capture-pane", "-p", "-t", target, "-S", fmt.Sprintf("-%d", n))
+}
+
+// captureColor is capture with the pane's colours and attributes kept as SGR
+// escape sequences (-e).
+func captureColor(ctx context.Context, target string, n int) (string, error) {
+	return tmux(ctx, "capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", n))
+}
+
+// stripANSI removes every escape sequence from a capture.
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
 }
 
 func tmux(ctx context.Context, args ...string) (string, error) {
