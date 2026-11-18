@@ -174,6 +174,7 @@ cc-watch
 | --------------- | ------------------------- |
 | `↑` / `↓`       | Move the selection        |
 | `↵` (Enter)     | Attach to the selected pane's session |
+| `b`             | Turn the [bell](#notifications) on or off for the selected session |
 | `p`             | Show or hide the preview  |
 | `q` / `Ctrl-C`  | Quit                      |
 
@@ -211,6 +212,48 @@ once on the same poller. Quitting a dashboard leaves the daemon running.
 | `--serve`       | Start the background [daemon](#daemon-mode) without opening a dashboard |
 | `--stop-server` | Stop the running daemon                                                 |
 | `--doctor`      | Report what cc-watch sees in every pane, then exit — see [Troubleshooting](#troubleshooting) |
+| `--notify-test` | Send a test desktop notification the way the daemon would, and report any error |
+
+## Notifications
+
+Press `b` on a session to turn on its bell; the row is marked with `*` in the left
+margin (`bell_icon` changes the mark). When a session with the bell on finishes a
+turn, going from `running` to `waiting`, you get a desktop notification titled
+after the session, with its last prompt as the body.
+
+The notification waits until the session has stayed `waiting` for `notify_after`
+seconds (10 by default). That comes on top of the 5 seconds of unchanged output
+the classifier already needs before it calls a pane `waiting`, so a pause in the
+middle of a turn does not set off the bell for an agent that is about to carry on.
+Each turn sends one notification. Turning the bell on for a session that has been
+waiting for a while does not send one; the next finished turn does.
+
+The bell belongs to the daemon, not the dashboard, so the notification arrives
+whether or not a dashboard is open. Bells last as long as the daemon and the
+pane: restarting the daemon, or closing the pane, turns them off.
+
+The daemon sends notifications with the first of these it finds:
+
+| Notifier            | Where                                                      |
+| ------------------- | ---------------------------------------------------------- |
+| `notify_command`    | Your own command, if configured — see [Configuration](#configuration) |
+| `osascript`         | macOS                                                      |
+| `notify-send`       | Linux and BSD: the freedesktop notification service, which KDE Plasma, GNOME, XFCE, dunst, mako and others provide |
+| `gdbus`             | The same service, called directly, for systems without `notify-send` (part of GLib, so almost always present) |
+| `tmux display-message` | Last resort: a message in the tmux status line           |
+
+Run `cc-watch --notify-test` to check that notifications reach your desktop, and
+`cc-watch --doctor` to see which notifier was picked. The daemon has to reach
+your desktop's session bus: started from a terminal in your desktop session it
+inherits `DBUS_SESSION_BUS_ADDRESS`, but a daemon started some other way (an SSH
+login, a service without the user's session environment) may not, and then logs
+the failure to `daemon.log`.
+
+`notify_command` covers anything else — a phone push through ntfy, WSL, a sound:
+
+```json
+{ "notify_command": ["ntfy", "publish", "--title", "{title}", "my-topic", "{body}"] }
+```
 
 ## tmux status bar
 
@@ -417,6 +460,7 @@ Configuration is optional. To override the defaults, create
   "agent_commands": ["claude", "codex", "gemini", "opencode", "pi", "aider"],
   "agent_icons": { "aider": "a" },
   "preview_lines": 30,
+  "notify_after": 10,
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
@@ -426,6 +470,9 @@ Configuration is optional. To override the defaults, create
 | `agent_commands` | `["claude", "codex", "gemini", "opencode", "pi"]` | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
 | `agent_icons`    | `{"claude": "CL", "codex": "CX", "gemini": "GM", "opencode": "OC", "pi": "PI"}` | The mark shown before a session name, per agent. Two-letter ASCII codes by default, so the rows line up in any terminal; set any string (a glyph, a single letter) to override. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no mark of its own gets its uppercased initial. |
 | `preview_lines`  | `30`                                 | How many of the selected pane's last lines the preview shows, at most 60. The terminal height can show fewer. |
+| `notify_after`   | `10`                                 | Seconds a session with the bell on must stay `waiting` before the [notification](#notifications) is sent. |
+| `notify_command` | _(none)_                             | A command to send notifications with instead of the built-in notifier, as an argument list; `{title}` and `{body}` are replaced in each argument. |
+| `bell_icon`      | `"*"`                                | The mark in the left margin of a row with the bell on, at most two columns wide. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

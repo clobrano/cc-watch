@@ -232,8 +232,11 @@ func runServe() error {
 	// snapshot a dashboard receives is already a full one. Clients that dial
 	// meanwhile wait in the listen backlog.
 	h := newHub()
+	n := findNotifier()
+	log.Printf("notifications via %s", n.name)
 	poll := func() {
 		update(ctx)
+		ringBells(n, time.Now())
 		updateStatusBar(ctx)
 		h.publish(encodeSnapshot(takeSnapshot()))
 	}
@@ -248,6 +251,11 @@ func runServe() error {
 			return nil
 		case <-ticker.C:
 			poll()
+		case c := <-h.cmds:
+			// Answer at once rather than on the next poll, so the dashboard
+			// shows the change immediately.
+			applyCommand(c)
+			h.publish(encodeSnapshot(takeSnapshot()))
 		}
 	}
 }

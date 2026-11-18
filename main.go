@@ -72,6 +72,15 @@ type Config struct {
 	// PreviewLines is how many of the selected pane's last lines are shown
 	// below the list. The terminal height can show fewer; 0 means the default.
 	PreviewLines int `json:"preview_lines"`
+	// NotifyAfter is how many seconds a session with the bell on must stay
+	// waiting after running before the notification is sent; 0 means the
+	// default.
+	NotifyAfter float64 `json:"notify_after"`
+	// NotifyCommand replaces the built-in notifier: argv with {title} and
+	// {body} substituted, e.g. ["ntfy", "publish", "mytopic", "{title}"].
+	NotifyCommand []string `json:"notify_command"`
+	// BellIcon marks the rows with the bell on.
+	BellIcon string `json:"bell_icon"`
 }
 
 // defaultAgentIcons are the two-letter marks the agents are known by: CL for
@@ -249,6 +258,11 @@ type session struct {
 	colorPane  string // lastPane as captured, colours included, for the preview
 	lastTitle  string
 	tail       []string // last lines of the pane, for the dashboard preview
+
+	// Notifications, see notify.go.
+	bell         bool      // the user asked to be told when this turn ends
+	armed        bool      // seen running since the last time it settled waiting
+	waitingSince time.Time // start of the current waiting stretch, if any
 }
 
 type keyEvent int
@@ -259,6 +273,7 @@ const (
 	keyEnter   keyEvent = -3
 	keyQuit    keyEvent = -4
 	keyPreview keyEvent = -5
+	keyBell    keyEvent = -6
 )
 
 var (
@@ -272,6 +287,8 @@ func main() {
 	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
 	doctor := flag.Bool("doctor", false,
 		"report what cc-watch sees in every tmux pane, and why each was or was not taken for an agent")
+	notifyTest := flag.Bool("notify-test", false,
+		"send a test desktop notification the way the daemon would, and report any error")
 	flag.Parse()
 
 	if *serve && *stop {
@@ -282,6 +299,13 @@ func main() {
 	cfg = loadConfig()
 
 	switch {
+	case *notifyTest:
+		if err := runNotifyTest(); err != nil {
+			fmt.Fprintln(os.Stderr, "cc-watch:", err)
+			os.Exit(1)
+		}
+		return
+
 	case *doctor:
 		if err := runDoctor(context.Background()); err != nil {
 			fmt.Fprintln(os.Stderr, "cc-watch:", err)
@@ -411,6 +435,15 @@ func runTUI() error {
 				preview = !preview
 				render(selected)
 
+			case keyBell:
+				names := sortedNames()
+				if selected < len(names) {
+					// The daemon answers with a fresh snapshot, which redraws.
+					if err := sendCommand(conn, command{Bell: names[selected]}); err != nil {
+						return fmt.Errorf("sending to the daemon: %w", err)
+					}
+				}
+
 			case keyUp:
 				if selected > 0 {
 					selected--
@@ -483,24 +516,29 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 			return
 		}
 		b := buf[:n]
-		// Arrow keys arrive as ESC [ A (up) / ESC [ B (down).
-		if len(b) >= 3 && b[0] == 0x1b && b[1] == '[' {
-			switch b[2] {
-			case 'A':
-				ch <- keyUp
-			case 'B':
-				ch <- keyDown
+		// A read can hold several keys — typed quickly, pasted, or sent by
+		// tmux send-keys — so walk all of it rather than only its first key.
+		for i := 0; i < len(b); i++ {
+			// Arrow keys arrive as ESC [ A (up) / ESC [ B (down).
+			if b[i] == 0x1b && i+2 < len(b) && b[i+1] == '[' {
+				switch b[i+2] {
+				case 'A':
+					ch <- keyUp
+				case 'B':
+					ch <- keyDown
+				}
+				i += 2
+				continue
 			}
-			continue
-		}
-		for _, c := range b {
-			switch c {
+			switch c := b[i]; c {
 			case '\r', '\n':
 				ch <- keyEnter
 			case 'q', 'Q', 0x03 /* Ctrl-C */ :
 				ch <- keyQuit
 			case 'p', 'P':
 				ch <- keyPreview
+			case 'b', 'B':
+				ch <- keyBell
 			}
 		}
 	}
@@ -917,6 +955,19 @@ func nameColumnWidth(names []string, w int) int {
 // icon, then the tmux session name, or the full "session:W.P" key when that
 // session has more than one agent pane.
 func displayNames(names []string) []string {
+	out := sessionNames(names)
+	for i, key := range names {
+		// The icon rides inside the session column rather than taking a
+		// column of its own, which would cost the prompt column ten chars.
+		out[i] = agentIcon(sessions[key].agent) + " " + out[i]
+	}
+	return out
+}
+
+// sessionNames are the names the user knows the panes by, in the order given:
+// the tmux session name, or the full "session:W.P" key when that session has
+// more than one agent pane.
+func sessionNames(names []string) []string {
 	sessionCount := map[string]int{}
 	for _, key := range names {
 		sessionCount[strings.SplitN(key, ":", 2)[0]]++
@@ -927,11 +978,24 @@ func displayNames(names []string) []string {
 		if sessionCount[name] > 1 {
 			name = key
 		}
-		// The icon rides inside the session column rather than taking a
-		// column of its own, which would cost the prompt column ten chars.
-		out[i] = agentIcon(sessions[key].agent) + " " + name
+		out[i] = name
 	}
 	return out
+}
+
+// bellMark is the two-column marker in the left margin of a row with the bell
+// on.
+func bellMark() string {
+	icon := cfg.BellIcon
+	if icon == "" {
+		icon = "*"
+	}
+	icon = clipColumns(icon, 2)
+	w := 0
+	for _, r := range icon {
+		w += runeColumns(r)
+	}
+	return icon + strings.Repeat(" ", 2-w)
 }
 
 func renderDashboard(selected int, preview bool) {
@@ -986,9 +1050,14 @@ func renderDashboard(selected int, preview bool) {
 			if text == "" {
 				text = s.desc
 			}
-			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
-			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%s%s\n",
-				pointer,
+			// The left margin carries the bell marker.
+			margin := "  "
+			if s.bell {
+				margin = "\033[33m" + bellMark() + reset
+			}
+			// margin (2) + pointer (2) = 4 chars before name, matches header indent
+			fmt.Fprintf(&b, "%s%s%s%-*s%s  %s%-*s%s  %s%s%s\n",
+				margin, pointer,
 				nameStyle, nameWidth, truncate(labels[i], nameWidth), reset,
 				s.state.color(), stateWidth, s.state.label(), reset,
 				dim, truncate(text, descWidth), reset,
@@ -1025,7 +1094,7 @@ func renderDashboard(selected int, preview bool) {
 		}
 	}
 
-	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   p preview   q quit%s\n", dim, reset)
+	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   b bell   p preview   q quit%s\n", dim, reset)
 	b.WriteString("\033[J")
 
 	// raw mode clears OPOST/ONLCR so \n no longer implies \r; use \r\n explicitly.

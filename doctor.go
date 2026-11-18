@@ -102,6 +102,7 @@ func reportConfig() {
 		}
 	}
 	fmt.Printf("agents:  %s\n", strings.Join(cfg.AgentCommands, ", "))
+	fmt.Printf("notify:  %s (try it with --notify-test)\n", findNotifier().name)
 
 	// Naming the built-ins that are missing, rather than one agent the check was
 	// written for, is what keeps this warning useful the next agent along.

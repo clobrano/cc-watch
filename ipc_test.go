@@ -79,3 +79,48 @@ func TestApplySnapshotReplacesSessions(t *testing.T) {
 		t.Fatalf("a:0.0 = %+v", s)
 	}
 }
+
+func TestHubReceivesCommands(t *testing.T) {
+	ln, err := net.Listen("unix", filepath.Join(t.TempDir(), "s.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	h := newHub()
+	go h.serve(ln)
+
+	conn, err := net.Dial("unix", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := sendCommand(conn, command{Bell: "notes:0.1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case c := <-h.cmds:
+		if c.Bell != "notes:0.1" {
+			t.Errorf("command = %+v", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no command received")
+	}
+}
+
+func TestApplyCommandTogglesBell(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+	sessions = map[string]*session{"notes:0.1": {name: "notes:0.1"}}
+	applyCommand(command{Bell: "notes:0.1"})
+	if !sessions["notes:0.1"].bell {
+		t.Fatal("bell not turned on")
+	}
+	if snap := takeSnapshot(); !snap.Sessions[0].Bell {
+		t.Fatal("snapshot does not carry the bell")
+	}
+	applyCommand(command{Bell: "notes:0.1"})
+	applyCommand(command{Bell: "gone:0.0"}) // unknown sessions are ignored
+	if sessions["notes:0.1"].bell {
+		t.Fatal("bell not turned off")
+	}
+}
