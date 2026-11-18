@@ -32,11 +32,12 @@ const writeTimeout = 5 * time.Second
 const maxSnapshot = 1 << 20
 
 type snapshotRow struct {
-	Name   string `json:"name"`
-	Agent  string `json:"agent"`
-	State  State  `json:"state"`
-	Prompt string `json:"prompt,omitempty"`
-	Desc   string `json:"desc,omitempty"`
+	Name   string   `json:"name"`
+	Agent  string   `json:"agent"`
+	State  State    `json:"state"`
+	Prompt string   `json:"prompt,omitempty"`
+	Desc   string   `json:"desc,omitempty"`
+	Tail   []string `json:"tail,omitempty"`
 }
 
 type snapshot struct {
@@ -50,6 +51,7 @@ func takeSnapshot() snapshot {
 		s := sessions[key]
 		snap.Sessions = append(snap.Sessions, snapshotRow{
 			Name: s.name, Agent: s.agent, State: s.state, Prompt: s.prompt, Desc: s.desc,
+			Tail: paneTail(s.colorPane, tailLines),
 		})
 	}
 	return snap
@@ -60,7 +62,7 @@ func takeSnapshot() snapshot {
 func applySnapshot(snap snapshot) {
 	sessions = make(map[string]*session, len(snap.Sessions))
 	for _, r := range snap.Sessions {
-		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc}
+		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail}
 	}
 }
 

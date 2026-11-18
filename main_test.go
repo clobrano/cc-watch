@@ -181,7 +181,7 @@ func TestTruncateCountsRunesNotBytes(t *testing.T) {
 
 	// The same applies to a session name, which always carries a three-byte
 	// agent icon in its first column.
-	if got := truncate("✻ notes", nameWidth); got != "✻ notes" {
+	if got := truncate("✻ notes", minNameWidth); got != "✻ notes" {
 		t.Errorf("truncate shortened a name that fits: %q", got)
 	}
 	if got, want := truncate("✻ abcdefghij", 8), "✻ abc..."; got != want {
@@ -396,5 +396,77 @@ func TestDefaultIconsAreASCII(t *testing.T) {
 				t.Errorf("icon for %s (%q) has non-ASCII rune %U; marks must be ASCII to stay one column wide", agent, icon, r)
 			}
 		}
+	}
+}
+
+func TestNameColumnWidth(t *testing.T) {
+	long := strings.Repeat("x", 60)
+	cases := []struct {
+		names []string
+		w     int
+		want  int
+	}{
+		{[]string{"CL notes"}, 120, minNameWidth},                                      // short names keep the minimum
+		{[]string{"CL " + strings.Repeat("a", 30)}, 120, 33},                           // grows to fit
+		{[]string{"CL " + long}, 200, maxNameWidth},                                    // capped
+		{[]string{"CL " + long}, 80, 80 - prefixWidth(0) - rightMargin - minDescWidth}, // leaves the prompt room
+		{[]string{"CL " + long}, 40, minNameWidth},                                     // never below the minimum
+	}
+	for _, c := range cases {
+		if got := nameColumnWidth(c.names, c.w); got != c.want {
+			t.Errorf("nameColumnWidth(%q, %d) = %d, want %d", c.names, c.w, got, c.want)
+		}
+	}
+}
+
+func TestPaneTail(t *testing.T) {
+	pane := "one\n\x1b[31mtwo\x1b[0m\tx\n╭────╮\n│ >  │\n╰────╯\n\n\n"
+	got := paneTail(pane, 4)
+	want := []string{"\x1b[31mtwo\x1b[0m     x", "╭────╮", "│ >  │", "╰────╯"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("paneTail = %q, want %q", got, want)
+	}
+	if got := paneTail("  \n\n", 4); got != nil {
+		t.Errorf("paneTail of a blank pane = %q, want nil", got)
+	}
+}
+
+func TestClipColumns(t *testing.T) {
+	if got := clipColumns("hello", 3); got != "hel" {
+		t.Errorf("clipColumns = %q", got)
+	}
+	// A wide glyph that would straddle the edge is dropped whole.
+	if got := clipColumns("ab漢字", 3); got != "ab" {
+		t.Errorf("clipColumns wide = %q", got)
+	}
+	if got := clipColumns("│ > │", 10); got != "│ > │" {
+		t.Errorf("clipColumns box = %q", got)
+	}
+}
+
+func TestPaneTailColors(t *testing.T) {
+	// A colour left open at a line break is carried onto the next line; a
+	// reset ends it; non-SGR escapes are dropped.
+	pane := "\x1b[1;32mgreen\nstill\x1b[0m\nplain\x1b]0;title\x07\n"
+	got := paneTail(pane, 3)
+	want := []string{"\x1b[1;32mgreen", "\x1b[1;32mstill\x1b[0m", "plain"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("paneTail = %q, want %q", got, want)
+	}
+	// The carry is worked out from lines above the window too.
+	if got := paneTail(pane, 1); len(got) != 1 || got[0] != "plain" {
+		t.Errorf("paneTail(1) = %q", got)
+	}
+	if got := paneTail("\x1b[31mred\nmore", 1); got[0] != "\x1b[31mmore" {
+		t.Errorf("carry into window = %q", got)
+	}
+}
+
+func TestClipColumnsSkipsEscapes(t *testing.T) {
+	if got := clipColumns("\x1b[31mhello\x1b[0m", 3); got != "\x1b[31mhel" {
+		t.Errorf("clipColumns = %q", got)
+	}
+	if got := clipColumns("\x1b[31mhi\x1b[0m", 5); got != "\x1b[31mhi\x1b[0m" {
+		t.Errorf("clipColumns kept = %q", got)
 	}
 }
