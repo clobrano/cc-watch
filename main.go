@@ -81,8 +81,9 @@ type Config struct {
 	// NotifyCommand replaces the built-in notifier: argv with {title} and
 	// {body} substituted, e.g. ["ntfy", "publish", "mytopic", "{title}"].
 	NotifyCommand []string `json:"notify_command"`
-	// BellIcon marks the rows with the bell on.
-	BellIcon string `json:"bell_icon"`
+	// Icons picks the symbols the bell column is drawn with: "unicode"
+	// (default), "nerd" or "ascii". See iconSets.
+	Icons string `json:"icons"`
 }
 
 // defaultAgentIcons are the two-letter marks the agents are known by: CL for
@@ -987,29 +988,41 @@ func sessionNames(names []string) []string {
 	return out
 }
 
-// defaultBellIcon is two columns wide, exactly the margin it sits in. A
-// terminal that draws it at the wrong width can have an ASCII mark instead
-// through bell_icon.
-const defaultBellIcon = "🔔"
-
-// bellMark is the two-column marker in the left margin of a row with the bell
-// on.
-func bellMark() string {
-	icon := cfg.BellIcon
-	if icon == "" {
-		icon = defaultBellIcon
-	}
-	icon = clipColumns(icon, 2)
-	w := 0
-	for _, r := range icon {
-		w += runeColumns(r)
-	}
-	return icon + strings.Repeat(" ", 2-w)
+// iconSet is the pair of symbols drawn in the left margin of a row: one for a
+// session with the bell on, one for a session whose notification has not
+// been seen yet. Each is a single column, followed by a space.
+type iconSet struct {
+	bell, unread string
 }
 
-// unreadMark follows the state of a session whose notification has not been
-// read yet: two columns, a space and a bold yellow dot.
-const unreadMark = " \033[1;33m●\033[0m"
+// iconSets are the choices for the icons setting.
+//
+// The app cannot bring a font with it — the terminal draws with the fonts of
+// the machine it runs on — and no terminal reports whether a glyph actually
+// rendered, so the default must be symbols every font can be relied on for.
+// The geometric shapes below are in DejaVu Sans Mono (which Hack, Konsole's
+// default, and Menlo derive from), JetBrains Mono, Liberation Mono and
+// FreeMono, and DejaVu is the fallback font on nearly every Linux system.
+//
+// The Nerd Font glyphs are Font Awesome's bell and bell-outline, from the part
+// of the Nerd Fonts range that kept its codepoints from v2 to v3; most of
+// the Material Design icons were moved in v3.
+var iconSets = map[string]iconSet{
+	"unicode": {bell: "◇", unread: "◆"},
+	"nerd":    {bell: "\uf0a2", unread: "\uf0f3"},
+	"ascii":   {bell: "o", unread: "!"},
+}
+
+const defaultIcons = "unicode"
+
+// icons is the configured icon set; an unknown name falls back to the default
+// (and --doctor says so).
+func icons() iconSet {
+	if set, ok := iconSets[strings.ToLower(cfg.Icons)]; ok {
+		return set
+	}
+	return iconSets[defaultIcons]
+}
 
 func renderDashboard(selected int, preview bool) {
 	const (
@@ -1063,20 +1076,18 @@ func renderDashboard(selected int, preview bool) {
 			if text == "" {
 				text = s.desc
 			}
-			// The left margin carries the bell marker.
+			// The left margin carries the bell: a dim mark while it is on,
+			// a bold one, with the name in bold too, for a notification not
+			// seen yet.
 			margin := "  "
-			if s.bell {
-				margin = "\033[33m" + bellMark() + reset
-			}
-			// A notification not yet read is flagged by a dot after the
-			// state, and the name is shown bold to catch the eye.
-			state := s.state.color() + fmt.Sprintf("%-*s", stateWidth, s.state.label()) + reset
-			if s.unread {
-				label := s.state.label()
-				state = s.state.color() + label + reset + unreadMark +
-					strings.Repeat(" ", max(0, stateWidth-len(label)-2))
+			switch {
+			case s.unread:
+				margin = "\033[1;33m" + icons().unread + reset + " "
 				nameStyle = bold
+			case s.bell:
+				margin = "\033[2;33m" + icons().bell + reset + " "
 			}
+			state := s.state.color() + fmt.Sprintf("%-*s", stateWidth, s.state.label()) + reset
 			// margin (2) + pointer (2) = 4 chars before name, matches header indent
 			fmt.Fprintf(&b, "%s%s%s%-*s%s  %s  %s%s%s\n",
 				margin, pointer,

@@ -216,9 +216,8 @@ once on the same poller. Quitting a dashboard leaves the daemon running.
 
 ## Notifications
 
-Press `b` on a session to turn on its bell; the row is marked with 🔔 in the left
-margin (`bell_icon` changes the mark, for a terminal that draws the emoji at the
-wrong width). When a session with the bell on finishes a turn, going from
+Press `b` on a session to turn on its bell; the row is marked with a dim `◇` in
+the left margin (see [Icons](#icons) for other symbols). When a session with the bell on finishes a turn, going from
 `running` to `waiting`, you get a desktop notification titled after the session —
 "notes is waiting", or "notes:0.1 is waiting" when that tmux session has more
 than one agent pane — with its last prompt as the body.
@@ -230,11 +229,12 @@ middle of a turn does not set off the bell for an agent that is about to carry o
 Each turn sends one notification. Turning the bell on for a session that has been
 waiting for a while does not send one; the next finished turn does.
 
-Until you get to it, the session is flagged as unread in the dashboard: a yellow
-`●` after its state, and its name in bold.
+Until you get to it, the session is flagged in the dashboard: the mark turns
+into a bold `◆` and the name is shown in bold.
 
 ```
-🔔> CL notes                  waiting ●  fix the parser
+◇   CL api                    running    add rate limiting to the /search endpoint
+◆ > CL notes                  waiting    fix the parser
 ```
 
 The flag clears as soon as you have been to the session: when it is on screen in
@@ -245,6 +245,23 @@ answered it from elsewhere, or when you turn its bell off.
 The bell belongs to the daemon, not the dashboard, so the notification arrives
 whether or not a dashboard is open. Bells last as long as the daemon and the
 pane: restarting the daemon, or closing the pane, turns them off.
+
+### Icons
+
+The `icons` setting picks the symbols the margin is drawn with:
+
+| `icons`             | Bell on | Not seen yet | Needs                                              |
+| ------------------- | ------- | ------------ | -------------------------------------------------- |
+| `unicode` (default) | `◇`     | `◆`          | Nothing: DejaVu Sans Mono (and Hack and Menlo, which derive from it), JetBrains Mono, Liberation Mono and FreeMono all have them, and DejaVu is the fallback font on nearly every Linux system |
+| `nerd`              | `` | `` | A [Nerd Font](https://www.nerdfonts.com/), or the symbols-only Nerd Font installed as a fallback. These are Font Awesome's bell outline (U+F0A2) and bell (U+F0F3), which kept their codepoints from Nerd Fonts v2 to v3 |
+| `ascii`             | `o`     | `!`          | Nothing at all                                     |
+
+cc-watch cannot bring a font of its own: the terminal draws with the fonts of
+the machine it runs on, and no terminal can tell an application whether a symbol
+actually rendered, so a missing glyph would just be a box. `cc-watch --doctor`
+draws all three sets, so you can see which ones your font has before you pick.
+
+### Notifiers
 
 The daemon sends notifications with the first of these it finds:
 
@@ -475,6 +492,7 @@ Configuration is optional. To override the defaults, create
   "agent_icons": { "aider": "a" },
   "preview_lines": 30,
   "notify_after": 10,
+  "icons": "unicode",
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
@@ -486,7 +504,7 @@ Configuration is optional. To override the defaults, create
 | `preview_lines`  | `30`                                 | How many of the selected pane's last lines the preview shows, at most 60. The terminal height can show fewer. |
 | `notify_after`   | `10`                                 | Seconds a session with the bell on must stay `waiting` before the [notification](#notifications) is sent. |
 | `notify_command` | _(none)_                             | A command to send notifications with instead of the built-in notifier, as an argument list; `{title}` and `{body}` are replaced in each argument. |
-| `bell_icon`      | `"🔔"`                               | The mark in the left margin of a row with the bell on, at most two columns wide. |
+| `icons`          | `"unicode"`                          | The symbols for a session with the bell on and one with a notification not seen yet: `unicode`, `nerd` or `ascii` — see [Icons](#icons). |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

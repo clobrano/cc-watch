@@ -470,3 +470,28 @@ func TestClipColumnsSkipsEscapes(t *testing.T) {
 		t.Errorf("clipColumns kept = %q", got)
 	}
 }
+
+func TestIcons(t *testing.T) {
+	old := cfg
+	defer func() { cfg = old }()
+	for name, want := range map[string]iconSet{
+		"":        iconSets["unicode"],
+		"nerd":    iconSets["nerd"],
+		"ASCII":   iconSets["ascii"],
+		"bogus":   iconSets["unicode"],
+		"unicode": {bell: "◇", unread: "◆"},
+	} {
+		cfg.Icons = name
+		if got := icons(); got != want {
+			t.Errorf("icons() with %q = %+v, want %+v", name, got, want)
+		}
+	}
+	// Every symbol must fit the one column the margin gives it.
+	for name, set := range iconSets {
+		for _, s := range []string{set.bell, set.unread} {
+			if w := len([]rune(s)); w != 1 || runeColumns([]rune(s)[0]) != 1 {
+				t.Errorf("%s icon %q is not a single one-column rune", name, s)
+			}
+		}
+	}
+}
