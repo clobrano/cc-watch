@@ -135,12 +135,15 @@ type paneInfo struct {
 	key     string
 	command string
 	pid     int
+	visible bool // on someone's screen: see paneFormat
 }
 
 // parsePane reads one line of paneFormat output.
 func parsePane(line string) (paneInfo, bool) {
-	fields := strings.SplitN(line, "|", 5)
-	if len(fields) != 5 {
+	// session_name comes last because it is the only field a user can put a
+	// '|' into — SplitN's limit then keeps such a name intact.
+	fields := strings.SplitN(line, "|", 6)
+	if len(fields) != 6 {
 		return paneInfo{}, false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(fields[2]))
@@ -148,8 +151,9 @@ func parsePane(line string) (paneInfo, bool) {
 		return paneInfo{}, false
 	}
 	return paneInfo{
-		key:     fields[4] + ":" + fields[0] + "." + fields[1],
+		key:     fields[5] + ":" + fields[0] + "." + fields[1],
 		command: strings.TrimSpace(fields[3]),
 		pid:     pid,
+		visible: fields[4] == "1",
 	}, true
 }

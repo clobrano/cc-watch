@@ -188,9 +188,16 @@ func ringBells(n notifier, now time.Time) {
 	labels := sessionNames(names)
 	for i, key := range names {
 		s := sessions[key]
+		// The notification counts as read once the user has been to the
+		// session: it is on their screen, or it is running again because
+		// they answered it.
+		if s.visible || s.state == StateActive {
+			s.unread = false
+		}
 		if !trackBell(s, now, cfg.notifyAfter()) {
 			continue
 		}
+		s.unread = true
 		body := s.prompt
 		if body == "" {
 			body = s.desc

@@ -39,6 +39,7 @@ type snapshotRow struct {
 	Desc   string   `json:"desc,omitempty"`
 	Tail   []string `json:"tail,omitempty"`
 	Bell   bool     `json:"bell,omitempty"`
+	Unread bool     `json:"unread,omitempty"`
 }
 
 // command is a request from a dashboard to the daemon, one JSON object per
@@ -46,6 +47,8 @@ type snapshotRow struct {
 type command struct {
 	// Bell toggles the bell on the named session (a "session:W.P" key).
 	Bell string `json:"bell,omitempty"`
+	// Seen marks the named session's notification as read.
+	Seen string `json:"seen,omitempty"`
 }
 
 // sendCommand writes one command to the daemon.
@@ -62,7 +65,13 @@ func applyCommand(c command) {
 	if c.Bell != "" {
 		if s, ok := sessions[c.Bell]; ok {
 			s.bell = !s.bell
+			if !s.bell {
+				s.unread = false
+			}
 		}
+	}
+	if s, ok := sessions[c.Seen]; ok {
+		s.unread = false
 	}
 }
 
@@ -78,7 +87,7 @@ func takeSnapshot() snapshot {
 		snap.Sessions = append(snap.Sessions, snapshotRow{
 			Name: s.name, Agent: s.agent, State: s.state, Prompt: s.prompt, Desc: s.desc,
 			Tail: paneTail(s.colorPane, tailLines),
-			Bell: s.bell,
+			Bell: s.bell, Unread: s.unread,
 		})
 	}
 	return snap
@@ -89,7 +98,7 @@ func takeSnapshot() snapshot {
 func applySnapshot(snap snapshot) {
 	sessions = make(map[string]*session, len(snap.Sessions))
 	for _, r := range snap.Sessions {
-		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail, bell: r.Bell}
+		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail, bell: r.Bell, unread: r.Unread}
 	}
 }
 

@@ -216,10 +216,12 @@ once on the same poller. Quitting a dashboard leaves the daemon running.
 
 ## Notifications
 
-Press `b` on a session to turn on its bell; the row is marked with `*` in the left
-margin (`bell_icon` changes the mark). When a session with the bell on finishes a
-turn, going from `running` to `waiting`, you get a desktop notification titled
-after the session, with its last prompt as the body.
+Press `b` on a session to turn on its bell; the row is marked with 🔔 in the left
+margin (`bell_icon` changes the mark, for a terminal that draws the emoji at the
+wrong width). When a session with the bell on finishes a turn, going from
+`running` to `waiting`, you get a desktop notification titled after the session —
+"notes is waiting", or "notes:0.1 is waiting" when that tmux session has more
+than one agent pane — with its last prompt as the body.
 
 The notification waits until the session has stayed `waiting` for `notify_after`
 seconds (10 by default). That comes on top of the 5 seconds of unchanged output
@@ -227,6 +229,18 @@ the classifier already needs before it calls a pane `waiting`, so a pause in the
 middle of a turn does not set off the bell for an agent that is about to carry on.
 Each turn sends one notification. Turning the bell on for a session that has been
 waiting for a while does not send one; the next finished turn does.
+
+Until you get to it, the session is flagged as unread in the dashboard: a yellow
+`●` after its state, and its name in bold.
+
+```
+🔔> CL notes                  waiting ●  fix the parser
+```
+
+The flag clears as soon as you have been to the session: when it is on screen in
+tmux (the active pane of the active window of an attached session), when you
+attach to it from the dashboard, when it starts running again because you
+answered it from elsewhere, or when you turn its bell off.
 
 The bell belongs to the daemon, not the dashboard, so the notification arrives
 whether or not a dashboard is open. Bells last as long as the daemon and the
@@ -472,7 +486,7 @@ Configuration is optional. To override the defaults, create
 | `preview_lines`  | `30`                                 | How many of the selected pane's last lines the preview shows, at most 60. The terminal height can show fewer. |
 | `notify_after`   | `10`                                 | Seconds a session with the bell on must stay `waiting` before the [notification](#notifications) is sent. |
 | `notify_command` | _(none)_                             | A command to send notifications with instead of the built-in notifier, as an argument list; `{title}` and `{body}` are replaced in each argument. |
-| `bell_icon`      | `"*"`                                | The mark in the left margin of a row with the bell on, at most two columns wide. |
+| `bell_icon`      | `"🔔"`                               | The mark in the left margin of a row with the bell on, at most two columns wide. |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

@@ -127,20 +127,26 @@ func TestCutField(t *testing.T) {
 
 func TestParsePane(t *testing.T) {
 	// session_name comes last in the format precisely so a '|' in it survives.
-	p, ok := parsePane("2|1|4711|node|my|session")
+	p, ok := parsePane("2|1|4711|node|1|my|session")
 	if !ok {
 		t.Fatal("parsePane failed on a well-formed line")
 	}
 	if want := "my|session:2.1"; p.key != want {
 		t.Errorf("key = %q, want %q", p.key, want)
 	}
+	if !p.visible {
+		t.Error("visible = false, want true")
+	}
+	if p, _ := parsePane("2|1|4711|node|0|s"); p.visible {
+		t.Error("visible = true for a pane off screen")
+	}
 	if p.command != "node" || p.pid != 4711 {
 		t.Errorf("command/pid = %q/%d, want %q/%d", p.command, p.pid, "node", 4711)
 	}
-	if _, ok := parsePane("2|1|node|session"); ok {
+	if _, ok := parsePane("2|1|node|0|session"); ok {
 		t.Error("parsePane accepted a short line")
 	}
-	if _, ok := parsePane("2|1|not-a-pid|node|session"); ok {
+	if _, ok := parsePane("2|1|not-a-pid|node|0|session"); ok {
 		t.Error("parsePane accepted a non-numeric pid")
 	}
 }

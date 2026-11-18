@@ -82,3 +82,47 @@ func TestNotifyCommandSubstitution(t *testing.T) {
 		t.Errorf("args = %q, want %q", got, want)
 	}
 }
+
+func TestUnreadLifecycle(t *testing.T) {
+	oldS, oldC := sessions, cfg
+	defer func() { sessions, cfg = oldS, oldC }()
+	cfg.NotifyAfter = 10
+	quiet := notifier{name: "test", args: func(_, _ string) []string { return []string{"true"} }}
+
+	s := &session{name: "notes:0.1", bell: true, state: StateActive}
+	sessions = map[string]*session{s.name: s}
+	t0 := time.Now()
+	ringBells(quiet, t0)
+	s.state = StateWaiting
+	ringBells(quiet, t0.Add(time.Second))
+	ringBells(quiet, t0.Add(12*time.Second))
+	if !s.unread {
+		t.Fatal("not unread after the notification")
+	}
+	ringBells(quiet, t0.Add(20*time.Second))
+	if !s.unread {
+		t.Fatal("unread cleared while nobody looked")
+	}
+
+	// Looking at the pane reads it.
+	s.visible = true
+	ringBells(quiet, t0.Add(22*time.Second))
+	if s.unread {
+		t.Fatal("still unread with the pane on screen")
+	}
+
+	// So does the session going back to work, answered from elsewhere.
+	s.visible, s.unread = false, true
+	s.state = StateActive
+	ringBells(quiet, t0.Add(30*time.Second))
+	if s.unread {
+		t.Fatal("still unread once running again")
+	}
+
+	// And going to it from the dashboard.
+	s.unread = true
+	applyCommand(command{Seen: s.name})
+	if s.unread {
+		t.Fatal("still unread after a seen command")
+	}
+}

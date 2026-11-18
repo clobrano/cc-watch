@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -40,7 +39,10 @@ const (
 	promptScrollback = 400
 
 	// paneFormat is the one list-panes query both the poller and --doctor use.
-	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|#{session_name}"
+	// The fifth field is 1 when the pane is on someone's screen: the active
+	// pane of the active window of a session with a client attached.
+	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|" +
+		"#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}|#{session_name}"
 
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
@@ -263,6 +265,8 @@ type session struct {
 	bell         bool      // the user asked to be told when this turn ends
 	armed        bool      // seen running since the last time it settled waiting
 	waitingSince time.Time // start of the current waiting stretch, if any
+	unread       bool      // notified, and the user has not been to it since
+	visible      bool      // on someone's screen in tmux right now
 }
 
 type keyEvent int
@@ -462,6 +466,10 @@ func runTUI() error {
 				if len(names) == 0 || selected >= len(names) {
 					break
 				}
+				// Going to the session reads its notification.
+				if sessions[names[selected]].unread {
+					sendCommand(conn, command{Seen: names[selected]})
+				}
 				attach(ctx, fd, names[selected], &rawState)
 				render(selected)
 			}
@@ -551,7 +559,7 @@ func update(ctx context.Context) {
 	// characters out of format output (3.4 rewrites a tab to '_'), so a tab
 	// delimiter yields one unsplittable field and no pane is ever matched.
 	// session_name comes last because it is the only field a user can put a
-	// '|' into — SplitN's 5-field limit then keeps such a name intact.
+	// '|' into — parsePane's field limit then keeps such a name intact.
 	out, err := tmux(ctx, "list-panes", "-a", "-F", paneFormat)
 	if err != nil {
 		sessions = map[string]*session{}
@@ -568,13 +576,12 @@ func update(ctx context.Context) {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "|", 5)
-		if len(fields) != 5 {
+		p, ok := parsePane(line)
+		if !ok {
 			continue
 		}
-		wIdx, pIdx, panePID, command, sname := fields[0], fields[1], fields[2], fields[3], fields[4]
 
-		agent := agentForCommand(strings.TrimSpace(command))
+		agent := agentForCommand(p.command)
 		if agent == "" {
 			// The pane command names no agent, but it may still be running one:
 			// tmux reports whatever the foreground process calls itself, which
@@ -584,16 +591,12 @@ func update(ctx context.Context) {
 			if !procsScanned {
 				procs, procsScanned = scanProcesses(ctx), true
 			}
-			pid, err := strconv.Atoi(strings.TrimSpace(panePID))
-			if err != nil {
-				continue
-			}
-			if agent = procs.agentInTree(pid); agent == "" {
+			if agent = procs.agentInTree(p.pid); agent == "" {
 				continue
 			}
 		}
 
-		key := sname + ":" + wIdx + "." + pIdx // e.g. "notes:0.1"
+		key := p.key // e.g. "notes:0.1"
 		target := "=" + key
 		seen[key] = true
 
@@ -612,6 +615,7 @@ func update(ctx context.Context) {
 			continue
 		}
 		s.agent = agent
+		s.visible = p.visible
 
 		// Hold "..." until we have observed the pane for at least idleThreshold.
 		if s.state == StateStarting && time.Since(s.lastChange) < idleThreshold {
@@ -983,12 +987,17 @@ func sessionNames(names []string) []string {
 	return out
 }
 
+// defaultBellIcon is two columns wide, exactly the margin it sits in. A
+// terminal that draws it at the wrong width can have an ASCII mark instead
+// through bell_icon.
+const defaultBellIcon = "🔔"
+
 // bellMark is the two-column marker in the left margin of a row with the bell
 // on.
 func bellMark() string {
 	icon := cfg.BellIcon
 	if icon == "" {
-		icon = "*"
+		icon = defaultBellIcon
 	}
 	icon = clipColumns(icon, 2)
 	w := 0
@@ -997,6 +1006,10 @@ func bellMark() string {
 	}
 	return icon + strings.Repeat(" ", 2-w)
 }
+
+// unreadMark follows the state of a session whose notification has not been
+// read yet: two columns, a space and a bold yellow dot.
+const unreadMark = " \033[1;33m●\033[0m"
 
 func renderDashboard(selected int, preview bool) {
 	const (
@@ -1055,11 +1068,20 @@ func renderDashboard(selected int, preview bool) {
 			if s.bell {
 				margin = "\033[33m" + bellMark() + reset
 			}
+			// A notification not yet read is flagged by a dot after the
+			// state, and the name is shown bold to catch the eye.
+			state := s.state.color() + fmt.Sprintf("%-*s", stateWidth, s.state.label()) + reset
+			if s.unread {
+				label := s.state.label()
+				state = s.state.color() + label + reset + unreadMark +
+					strings.Repeat(" ", max(0, stateWidth-len(label)-2))
+				nameStyle = bold
+			}
 			// margin (2) + pointer (2) = 4 chars before name, matches header indent
-			fmt.Fprintf(&b, "%s%s%s%-*s%s  %s%-*s%s  %s%s%s\n",
+			fmt.Fprintf(&b, "%s%s%s%-*s%s  %s  %s%s%s\n",
 				margin, pointer,
 				nameStyle, nameWidth, truncate(labels[i], nameWidth), reset,
-				s.state.color(), stateWidth, s.state.label(), reset,
+				state,
 				dim, truncate(text, descWidth), reset,
 			)
 		}
