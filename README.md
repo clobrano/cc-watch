@@ -86,6 +86,11 @@ From those two signals it derives a state:
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
 
+"Output" here means the agent's own: the transcript above its input. What you
+type into the input box, and the hints the footer shows as you type, are left
+out, so typing a prompt does not make a waiting agent look like it is running
+(or, once you stop, set off its [bell](#notifications)).
+
 Each row is marked with the agent running in it — `CL` for Claude Code, `CX` for
 Codex, `GM` for Gemini CLI, `OC` for opencode — so a screen of mixed sessions
 stays readable. The mark rides at the front of the session column rather than

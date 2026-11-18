@@ -251,16 +251,16 @@ var (
 )
 
 type session struct {
-	name       string
-	agent      string // which configured agent this pane is running
-	state      State
-	desc       string
-	prompt     string
-	lastChange time.Time
-	lastPane   string
-	colorPane  string // lastPane as captured, colours included, for the preview
-	lastTitle  string
-	tail       []string // last lines of the pane, for the dashboard preview
+	name         string
+	agent        string // which configured agent this pane is running
+	state        State
+	desc         string
+	prompt       string
+	lastChange   time.Time
+	lastActivity string // activityKey of the last capture, to notice the agent working
+	colorPane    string // the last capture, colours included, for the preview
+	lastTitle    string
+	tail         []string // last lines of the pane, for the dashboard preview
 
 	// Notifications, see notify.go.
 	bell         bool      // the user asked to be told when this turn ends
@@ -605,7 +605,7 @@ func update(ctx context.Context) {
 		if !ok {
 			color, _ := captureColor(ctx, target, paneLines)
 			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting,
-				lastPane: stripANSI(color), colorPane: color}
+				lastActivity: activityKey(stripANSI(color)), colorPane: color}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
 			// newer one.
@@ -630,12 +630,13 @@ func update(ctx context.Context) {
 		pane := stripANSI(color)
 		s.colorPane = color
 
+		// Only the agent's own output counts as activity: see activityKey.
 		// The title joins the change check because classify keys on it: a live
 		// spinner animates its frames, a stale one freezes, and only a changing
 		// title keeps that pane Active.
-		if pane != s.lastPane || title != s.lastTitle {
+		if activity := activityKey(pane); activity != s.lastActivity || title != s.lastTitle {
 			s.lastChange = time.Now()
-			s.lastPane = pane
+			s.lastActivity = activity
 			s.lastTitle = title
 		}
 
@@ -804,6 +805,36 @@ func promptMarker(line string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// activityLines is how much of the transcript's tail activityKey compares.
+// The tail rather than the whole: a growing input box pushes the top of the
+// transcript off the screen, but leaves the lines just above it in place.
+const activityLines = 20
+
+// activityKey is the part of a pane that changes when the agent works: the
+// bottom of its transcript, spinner line included, without the input box and
+// the footer under it. Comparing whole captures, the user typing a prompt
+// read as the agent running — and when they stopped, as a turn that had just
+// ended, which rang the bell.
+func activityKey(pane string) string {
+	lines := aboveInput(paneText(pane))
+	// A bordered input box (Gemini CLI, Claude Code's older UI) is cut at its
+	// bottom edge by aboveInput, leaving the box's body, where the typing
+	// shows, on the transcript side. Cut it at its top edge instead.
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.ContainsRune(lines[i], '╭') {
+			lines = lines[:i]
+			break
+		}
+		if !strings.ContainsRune(lines[i], '│') {
+			break
+		}
+	}
+	if len(lines) > activityLines {
+		lines = lines[len(lines)-activityLines:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // aboveInput cuts a pane down to its transcript, dropping the live input line
