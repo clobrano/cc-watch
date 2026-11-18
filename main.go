@@ -998,17 +998,17 @@ func renderDashboard(selected int, preview bool) {
 	}
 
 	// The preview takes whatever height the list and the footer leave, up to
-	// preview_lines: blank + titled rule above it, blank + help line below, and
-	// the line the cursor lands on after the help line.
+	// preview_lines: two blanks + titled rule above it, blank + help line below,
+	// and the line the cursor lands on after the help line.
 	if preview && selected < len(names) {
-		avail := termHeight - used - 5
+		avail := termHeight - used - 6
 		if n := min(cfg.previewLines(), avail); n >= 3 {
 			s := sessions[names[selected]]
 			// A heavy rule and a gutter in the selected row's state colour
 			// set the preview apart from the list and tie it to its row.
 			accent := s.state.color()
 			title := truncate(labels[selected]+" · "+s.state.label(), max(0, sepWidth-5))
-			fmt.Fprintf(&b, "\n  %s━━ %s%s%s%s %s%s\n",
+			fmt.Fprintf(&b, "\n\n  %s━━ %s%s%s%s %s%s\n",
 				accent, bold, title, reset, accent,
 				strings.Repeat("━", max(0, sepWidth-len([]rune(title))-2)), reset)
 			gutter := "  " + accent + "│" + reset + " "

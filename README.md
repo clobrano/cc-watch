@@ -20,6 +20,7 @@ lets you jump straight to the one that needs you.
     CL docs                   idle       document the new --serve flag
     GM scratch                error      $
 
+
   ━━ GM api:0.1 · waiting ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   │ ● Edited src/search/handler.go (+42 −3)
   │ ╭──────────────────────────────────────────────────────────────────╮
