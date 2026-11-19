@@ -41,8 +41,12 @@ const (
 	// paneFormat is the one list-panes query both the poller and --doctor use.
 	// The fifth field is 1 when the pane is on someone's screen: the active
 	// pane of the active window of a session with a client attached.
+	// The sixth is the pane's id (%12), which every other tmux call targets:
+	// it never changes for the life of the pane, while the session name can
+	// be renamed, and comes back from list-panes mangled when it holds
+	// characters the locale cannot show.
 	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|" +
-		"#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}|#{session_name}"
+		"#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}|#{pane_id}|#{session_name}"
 
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
@@ -251,7 +255,8 @@ var (
 )
 
 type session struct {
-	name         string
+	id           string // tmux pane id, e.g. "%12": the key in sessions
+	name         string // "session:W.P", refreshed every poll
 	agent        string // which configured agent this pane is running
 	state        State
 	desc         string
@@ -482,7 +487,7 @@ func runTUI() error {
 // (instant, TUI keeps running). Outside tmux it suspends the TUI, runs
 // attach-session as a subprocess, then resumes when the user detaches.
 func attach(ctx context.Context, fd int, key string, rawState **term.State) {
-	target := "=" + key
+	target := tmuxTarget(key)
 	if os.Getenv("TMUX") != "" {
 		exec.CommandContext(ctx, "tmux", "switch-client", "-t", target).Run()
 		return
@@ -600,14 +605,17 @@ func update(ctx context.Context) {
 			}
 		}
 
-		key := p.key // e.g. "notes:0.1"
-		target := "=" + key
+		// Panes are tracked by id, so renaming a session or moving a window
+		// keeps the pane's state — its bell among it — and only relabels it.
+		key, target := p.id, p.id
 		seen[key] = true
 
 		s, ok := sessions[key]
-		if !ok {
+		if ok {
+			s.name = p.key
+		} else {
 			color, _ := captureColor(ctx, target, paneLines)
-			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting,
+			s = &session{id: p.id, name: p.key, agent: agent, lastChange: time.Now(), state: StateStarting,
 				lastActivity: activityKey(stripANSI(color)), colorPane: color}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
@@ -1085,16 +1093,17 @@ func displayNames(names []string) []string {
 // sessionNames are the names the user knows the panes by, in the order given:
 // the tmux session name, or the full "session:W.P" key when that session has
 // more than one agent pane.
-func sessionNames(names []string) []string {
+func sessionNames(keys []string) []string {
 	sessionCount := map[string]int{}
-	for _, key := range names {
-		sessionCount[strings.SplitN(key, ":", 2)[0]]++
+	for _, key := range keys {
+		sessionCount[strings.SplitN(sessions[key].name, ":", 2)[0]]++
 	}
-	out := make([]string, len(names))
-	for i, key := range names {
-		name := strings.SplitN(key, ":", 2)[0]
+	out := make([]string, len(keys))
+	for i, key := range keys {
+		full := sessions[key].name
+		name := strings.SplitN(full, ":", 2)[0]
 		if sessionCount[name] > 1 {
-			name = key
+			name = full
 		}
 		out[i] = name
 	}
@@ -1405,13 +1414,30 @@ func clearStatusBar() {
 	exec.Command("tmux", "refresh-client", "-S").Run()
 }
 
+// sortedNames are the keys of sessions in display order: by the pane's
+// "session:W.P" name, so the list reads alphabetically whatever the keys are.
 func sortedNames() []string {
-	names := make([]string, 0, len(sessions))
-	for name := range sessions {
-		names = append(names, name)
+	keys := make([]string, 0, len(sessions))
+	for key := range sessions {
+		keys = append(keys, key)
 	}
-	sort.Strings(names)
-	return names
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := sessions[keys[i]], sessions[keys[j]]
+		if a.name != b.name {
+			return a.name < b.name
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+// tmuxTarget turns a sessions key into a tmux target: a pane id is one as it
+// is, and the "session:W.P" key an older daemon sends needs an exact-match '='.
+func tmuxTarget(key string) string {
+	if strings.HasPrefix(key, "%") {
+		return key
+	}
+	return "=" + key
 }
 
 // truncate cuts to n columns, counting runes rather than bytes: prompt text can

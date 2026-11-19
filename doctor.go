@@ -136,7 +136,8 @@ type paneInfo struct {
 	key     string
 	command string
 	pid     int
-	visible bool // on someone's screen: see paneFormat
+	visible bool   // on someone's screen: see paneFormat
+	id      string // tmux pane id, e.g. "%12"
 }
 
 // reportIcons draws every icon set, since only the user can see whether their
@@ -163,8 +164,8 @@ func reportIcons() {
 func parsePane(line string) (paneInfo, bool) {
 	// session_name comes last because it is the only field a user can put a
 	// '|' into — SplitN's limit then keeps such a name intact.
-	fields := strings.SplitN(line, "|", 6)
-	if len(fields) != 6 {
+	fields := strings.SplitN(line, "|", 7)
+	if len(fields) != 7 || !strings.HasPrefix(fields[5], "%") {
 		return paneInfo{}, false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(fields[2]))
@@ -172,7 +173,8 @@ func parsePane(line string) (paneInfo, bool) {
 		return paneInfo{}, false
 	}
 	return paneInfo{
-		key:     fields[5] + ":" + fields[0] + "." + fields[1],
+		key:     fields[6] + ":" + fields[0] + "." + fields[1],
+		id:      fields[5],
 		command: strings.TrimSpace(fields[3]),
 		pid:     pid,
 		visible: fields[4] == "1",

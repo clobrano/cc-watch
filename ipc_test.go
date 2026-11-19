@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -122,5 +123,37 @@ func TestApplyCommandTogglesBell(t *testing.T) {
 	applyCommand(command{Bell: "gone:0.0"}) // unknown sessions are ignored
 	if sessions["notes:0.1"].bell {
 		t.Fatal("bell not turned off")
+	}
+}
+
+func TestSessionsKeyedByPaneID(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+
+	// Rows are keyed by pane id but listed by name, and a session name is
+	// shown in full only where it has more than one agent pane.
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%7", Name: "zeta:0.0"},
+		{ID: "%2", Name: "api:1.0"},
+		{ID: "%9", Name: "api:0.1"},
+	}})
+	keys := sortedNames()
+	if want := []string{"%9", "%2", "%7"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("sortedNames = %q, want %q", keys, want)
+	}
+	if got, want := sessionNames(keys), []string{"api:0.1", "api:1.0", "zeta"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionNames = %q, want %q", got, want)
+	}
+	if tmuxTarget("%9") != "%9" {
+		t.Error("a pane id is not used as its own target")
+	}
+
+	// An older daemon sends no id: its rows are keyed, and targeted, by name.
+	applySnapshot(snapshot{Sessions: []snapshotRow{{Name: "notes:0.1"}}})
+	if _, ok := sessions["notes:0.1"]; !ok {
+		t.Fatal("a row without an id is not keyed by its name")
+	}
+	if got := tmuxTarget("notes:0.1"); got != "=notes:0.1" {
+		t.Errorf("tmuxTarget(name) = %q", got)
 	}
 }
