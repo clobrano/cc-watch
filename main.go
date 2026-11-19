@@ -1108,13 +1108,12 @@ func renderDashboard(selected int, preview bool) {
 				text = s.desc
 			}
 			// The left margin carries the bell: a dim mark while it is on,
-			// a bold one, with the name in bold too, for a notification not
-			// seen yet.
+			// a bold one for a notification not seen yet. Only the mark
+			// changes: a bold name would read as the selected row.
 			margin := "  "
 			switch {
 			case s.unread:
 				margin = "\033[1;33m" + icons().unread + reset + " "
-				nameStyle = bold
 			case s.bell:
 				margin = "\033[2;33m" + icons().bell + reset + " "
 			}

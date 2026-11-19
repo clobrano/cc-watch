@@ -235,7 +235,7 @@ Each turn sends one notification. Turning the bell on for a session that has bee
 waiting for a while does not send one; the next finished turn does.
 
 Until you get to it, the session is flagged in the dashboard: the mark turns
-into a bold `◆` and the name is shown in bold.
+into a bold `◆`.
 
 ```
 ◇   CL api                    running    add rate limiting to the /search endpoint
