@@ -157,3 +157,42 @@ func TestSessionsKeyedByPaneID(t *testing.T) {
 		t.Errorf("tmuxTarget(name) = %q", got)
 	}
 }
+
+func TestSessionNameWithColon(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+	// tmux allows ':' in a session name; only the last one separates the
+	// window and pane.
+	long := "OSAC-6011:-Design-Expose-ComputeInstance-Provisioning-Failures"
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%27", Name: long + ":0.0"},
+		{ID: "%30", Name: "OSAC-6011:1.0"},
+	}})
+	got := sessionNames(sortedNames())
+	if want := []string{"OSAC-6011", long}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionNames = %q, want %q", got, want)
+	}
+	// Two panes of the colon session: both are told apart by window.pane.
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%27", Name: long + ":0.0"},
+		{ID: "%39", Name: long + ":1.0"},
+	}})
+	got = sessionNames(sortedNames())
+	if want := []string{long + ":0.0", long + ":1.0"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionNames = %q, want %q", got, want)
+	}
+}
+
+func TestSortedNamesNumericIndexes(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%1", Name: "api:10.0"},
+		{ID: "%2", Name: "api:2.1"},
+		{ID: "%3", Name: "api:2.0"},
+		{ID: "%4", Name: "a:b:0.0"}, // session "a:b" sorts before "api"
+	}})
+	if got, want := sortedNames(), []string{"%4", "%3", "%2", "%1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sortedNames = %q, want %q", got, want)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -1093,15 +1094,25 @@ func displayNames(names []string) []string {
 // sessionNames are the names the user knows the panes by, in the order given:
 // the tmux session name, or the full "session:W.P" key when that session has
 // more than one agent pane.
+// tmuxSession is the session part of a "session:W.P" name. It is cut at the
+// last colon, not the first: tmux allows a colon in a session name, while the
+// window and pane indexes are only digits and a dot.
+func tmuxSession(name string) string {
+	if i := strings.LastIndex(name, ":"); i >= 0 {
+		return name[:i]
+	}
+	return name
+}
+
 func sessionNames(keys []string) []string {
 	sessionCount := map[string]int{}
 	for _, key := range keys {
-		sessionCount[strings.SplitN(sessions[key].name, ":", 2)[0]]++
+		sessionCount[tmuxSession(sessions[key].name)]++
 	}
 	out := make([]string, len(keys))
 	for i, key := range keys {
 		full := sessions[key].name
-		name := strings.SplitN(full, ":", 2)[0]
+		name := tmuxSession(full)
 		if sessionCount[name] > 1 {
 			name = full
 		}
@@ -1422,13 +1433,41 @@ func sortedNames() []string {
 		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		a, b := sessions[keys[i]], sessions[keys[j]]
-		if a.name != b.name {
-			return a.name < b.name
+		a, b := sessions[keys[i]].name, sessions[keys[j]].name
+		if sa, sb := tmuxSession(a), tmuxSession(b); sa != sb {
+			return sa < sb
+		}
+		// Within a session, by window then pane, as numbers: window 10
+		// after window 2.
+		wa, pa := paneIndexes(a)
+		wb, pb := paneIndexes(b)
+		if wa != wb {
+			return wa < wb
+		}
+		if pa != pb {
+			return pa < pb
 		}
 		return keys[i] < keys[j]
 	})
 	return keys
+}
+
+// paneIndexes reads the window and pane indexes off a "session:W.P" name; -1
+// for either that is missing.
+func paneIndexes(name string) (window, pane int) {
+	window, pane = -1, -1
+	i := strings.LastIndex(name, ":")
+	if i < 0 {
+		return
+	}
+	w, p, _ := strings.Cut(name[i+1:], ".")
+	if n, err := strconv.Atoi(w); err == nil {
+		window = n
+	}
+	if n, err := strconv.Atoi(p); err == nil {
+		pane = n
+	}
+	return
 }
 
 // tmuxTarget turns a sessions key into a tmux target: a pane id is one as it
