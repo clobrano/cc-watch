@@ -568,6 +568,9 @@ func update(ctx context.Context) {
 	}
 
 	seen := map[string]bool{}
+	// recheck holds the panes whose only sign of life may be a spinner; see
+	// spinnerFrames.
+	var recheck []spinnerCheck
 	// procs is taken lazily, at most once per poll, and only once some pane has
 	// failed to name its agent: a screen of self-naming agents never pays for it.
 	var procs *procTable
@@ -638,6 +641,8 @@ func update(ctx context.Context) {
 			s.lastChange = time.Now()
 			s.lastActivity = activity
 			s.lastTitle = title
+		} else if frames := spinnerFrames(pane, title); frames != "" {
+			recheck = append(recheck, spinnerCheck{s: s, target: target, pane: pane, title: title, frames: frames})
 		}
 
 		s.state = classify(pane, strings.TrimSpace(title), s.lastChange)
@@ -650,10 +655,87 @@ func update(ctx context.Context) {
 		}
 	}
 
+	recheckSpinners(ctx, recheck)
+
 	for key := range sessions {
 		if !seen[key] {
 			delete(sessions, key)
 		}
+	}
+}
+
+// spinnerRecheck is how long after a poll a pane showing a spinner is looked at
+// again. Spinners turn at 80-120ms a frame through 8-10 frames, so a whole
+// turn often takes exactly 1s or a divisor of it, and a poll every 2s then
+// lands on the same frame every time: the spinner looks frozen. 150ms is a
+// multiple of none of those turns, so a live spinner has moved on by then.
+const spinnerRecheck = 150 * time.Millisecond
+
+// spinnerScanLines is how far up from the bottom of a pane a spinner is
+// looked for. Agents draw theirs near the input: above it, in it, or in the
+// status lines under it.
+const spinnerScanLines = 40
+
+type spinnerCheck struct {
+	s           *session
+	target      string
+	pane, title string
+	frames      string // spinnerFrames at poll time
+}
+
+// spinnerFrames is every line near the bottom of the pane, and the title, that
+// carries a braille spinner glyph — "" when there are none. A long thinking
+// phase can leave a spinner as the only thing moving on screen, and one drawn
+// under the input is not part of activityKey at all, so it is checked on its
+// own. Braille that is part of the output does not move, and neither does the
+// frame a crashed agent left behind, so neither reads as activity.
+func spinnerFrames(pane, title string) string {
+	var out []string
+	if hasBraille(title) {
+		out = append(out, title)
+	}
+	lines := paneText(pane)
+	if len(lines) > spinnerScanLines {
+		lines = lines[len(lines)-spinnerScanLines:]
+	}
+	for _, l := range lines {
+		if hasBraille(l) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// hasBraille reports whether s holds a braille pattern other than the blank
+// one, which is what every braille spinner is drawn with.
+func hasBraille(s string) bool {
+	for _, r := range s {
+		if r > 0x2800 && r <= 0x28FF {
+			return true
+		}
+	}
+	return false
+}
+
+// recheckSpinners looks again at the panes whose spinner was the only thing
+// that might be moving, and counts a changed frame as activity.
+func recheckSpinners(ctx context.Context, checks []spinnerCheck) {
+	if len(checks) == 0 {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(spinnerRecheck):
+	}
+	for _, c := range checks {
+		title, _ := tmux(ctx, "display-message", "-p", "-t", c.target, "#{pane_title}")
+		pane, err := capture(ctx, c.target, paneLines)
+		if err != nil || spinnerFrames(pane, title) == c.frames {
+			continue
+		}
+		c.s.lastChange = time.Now()
+		c.s.state = classify(c.pane, strings.TrimSpace(c.title), c.s.lastChange)
 	}
 }
 

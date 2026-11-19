@@ -91,6 +91,14 @@ type into the input box, and the hints the footer shows as you type, are left
 out, so typing a prompt does not make a waiting agent look like it is running
 (or, once you stop, set off its [bell](#notifications)).
 
+A long thinking phase can leave a braille spinner as the only thing moving on
+screen, sometimes in the status lines under the input, which are left out
+above. And a spinner whose turn takes exactly a second shows the same frame at
+every 2-second poll, so it looks frozen. So when a pane shows a spinner and
+nothing else has changed, cc-watch looks again 150ms later: a frame that has
+moved on means the agent is working. A spinner frozen by a crashed agent does
+not, and neither does braille that is part of the output.
+
 Each row is marked with the agent running in it — `CL` for Claude Code, `CX` for
 Codex, `GM` for Gemini CLI, `OC` for opencode — so a screen of mixed sessions
 stays readable. The mark rides at the front of the session column rather than
