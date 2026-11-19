@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -40,7 +39,10 @@ const (
 	promptScrollback = 400
 
 	// paneFormat is the one list-panes query both the poller and --doctor use.
-	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|#{session_name}"
+	// The fifth field is 1 when the pane is on someone's screen: the active
+	// pane of the active window of a session with a client attached.
+	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|" +
+		"#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}|#{session_name}"
 
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
@@ -72,6 +74,16 @@ type Config struct {
 	// PreviewLines is how many of the selected pane's last lines are shown
 	// below the list. The terminal height can show fewer; 0 means the default.
 	PreviewLines int `json:"preview_lines"`
+	// NotifyAfter is how many seconds a session with the bell on must stay
+	// waiting after running before the notification is sent; 0 means the
+	// default.
+	NotifyAfter float64 `json:"notify_after"`
+	// NotifyCommand replaces the built-in notifier: argv with {title} and
+	// {body} substituted, e.g. ["ntfy", "publish", "mytopic", "{title}"].
+	NotifyCommand []string `json:"notify_command"`
+	// Icons picks the symbols the bell column is drawn with: "unicode"
+	// (default), "nerd" or "ascii". See iconSets.
+	Icons string `json:"icons"`
 }
 
 // defaultAgentIcons are the two-letter marks the agents are known by: CL for
@@ -239,16 +251,23 @@ var (
 )
 
 type session struct {
-	name       string
-	agent      string // which configured agent this pane is running
-	state      State
-	desc       string
-	prompt     string
-	lastChange time.Time
-	lastPane   string
-	colorPane  string // lastPane as captured, colours included, for the preview
-	lastTitle  string
-	tail       []string // last lines of the pane, for the dashboard preview
+	name         string
+	agent        string // which configured agent this pane is running
+	state        State
+	desc         string
+	prompt       string
+	lastChange   time.Time
+	lastActivity string // activityKey of the last capture, to notice the agent working
+	colorPane    string // the last capture, colours included, for the preview
+	lastTitle    string
+	tail         []string // last lines of the pane, for the dashboard preview
+
+	// Notifications, see notify.go.
+	bell         bool      // the user asked to be told when this turn ends
+	armed        bool      // seen running since the last time it settled waiting
+	waitingSince time.Time // start of the current waiting stretch, if any
+	unread       bool      // notified, and the user has not been to it since
+	visible      bool      // on someone's screen in tmux right now
 }
 
 type keyEvent int
@@ -259,6 +278,7 @@ const (
 	keyEnter   keyEvent = -3
 	keyQuit    keyEvent = -4
 	keyPreview keyEvent = -5
+	keyBell    keyEvent = -6
 )
 
 var (
@@ -272,6 +292,8 @@ func main() {
 	stop := flag.Bool("stop-server", false, "stop the running --serve daemon")
 	doctor := flag.Bool("doctor", false,
 		"report what cc-watch sees in every tmux pane, and why each was or was not taken for an agent")
+	notifyTest := flag.Bool("notify-test", false,
+		"send a test desktop notification the way the daemon would, and report any error")
 	flag.Parse()
 
 	if *serve && *stop {
@@ -282,6 +304,13 @@ func main() {
 	cfg = loadConfig()
 
 	switch {
+	case *notifyTest:
+		if err := runNotifyTest(); err != nil {
+			fmt.Fprintln(os.Stderr, "cc-watch:", err)
+			os.Exit(1)
+		}
+		return
+
 	case *doctor:
 		if err := runDoctor(context.Background()); err != nil {
 			fmt.Fprintln(os.Stderr, "cc-watch:", err)
@@ -411,6 +440,15 @@ func runTUI() error {
 				preview = !preview
 				render(selected)
 
+			case keyBell:
+				names := sortedNames()
+				if selected < len(names) {
+					// The daemon answers with a fresh snapshot, which redraws.
+					if err := sendCommand(conn, command{Bell: names[selected]}); err != nil {
+						return fmt.Errorf("sending to the daemon: %w", err)
+					}
+				}
+
 			case keyUp:
 				if selected > 0 {
 					selected--
@@ -428,6 +466,10 @@ func runTUI() error {
 				names := sortedNames()
 				if len(names) == 0 || selected >= len(names) {
 					break
+				}
+				// Going to the session reads its notification.
+				if sessions[names[selected]].unread {
+					sendCommand(conn, command{Seen: names[selected]})
 				}
 				attach(ctx, fd, names[selected], &rawState)
 				render(selected)
@@ -483,24 +525,29 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 			return
 		}
 		b := buf[:n]
-		// Arrow keys arrive as ESC [ A (up) / ESC [ B (down).
-		if len(b) >= 3 && b[0] == 0x1b && b[1] == '[' {
-			switch b[2] {
-			case 'A':
-				ch <- keyUp
-			case 'B':
-				ch <- keyDown
+		// A read can hold several keys — typed quickly, pasted, or sent by
+		// tmux send-keys — so walk all of it rather than only its first key.
+		for i := 0; i < len(b); i++ {
+			// Arrow keys arrive as ESC [ A (up) / ESC [ B (down).
+			if b[i] == 0x1b && i+2 < len(b) && b[i+1] == '[' {
+				switch b[i+2] {
+				case 'A':
+					ch <- keyUp
+				case 'B':
+					ch <- keyDown
+				}
+				i += 2
+				continue
 			}
-			continue
-		}
-		for _, c := range b {
-			switch c {
+			switch c := b[i]; c {
 			case '\r', '\n':
 				ch <- keyEnter
 			case 'q', 'Q', 0x03 /* Ctrl-C */ :
 				ch <- keyQuit
 			case 'p', 'P':
 				ch <- keyPreview
+			case 'b', 'B':
+				ch <- keyBell
 			}
 		}
 	}
@@ -513,7 +560,7 @@ func update(ctx context.Context) {
 	// characters out of format output (3.4 rewrites a tab to '_'), so a tab
 	// delimiter yields one unsplittable field and no pane is ever matched.
 	// session_name comes last because it is the only field a user can put a
-	// '|' into — SplitN's 5-field limit then keeps such a name intact.
+	// '|' into — parsePane's field limit then keeps such a name intact.
 	out, err := tmux(ctx, "list-panes", "-a", "-F", paneFormat)
 	if err != nil {
 		sessions = map[string]*session{}
@@ -530,13 +577,12 @@ func update(ctx context.Context) {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "|", 5)
-		if len(fields) != 5 {
+		p, ok := parsePane(line)
+		if !ok {
 			continue
 		}
-		wIdx, pIdx, panePID, command, sname := fields[0], fields[1], fields[2], fields[3], fields[4]
 
-		agent := agentForCommand(strings.TrimSpace(command))
+		agent := agentForCommand(p.command)
 		if agent == "" {
 			// The pane command names no agent, but it may still be running one:
 			// tmux reports whatever the foreground process calls itself, which
@@ -546,16 +592,12 @@ func update(ctx context.Context) {
 			if !procsScanned {
 				procs, procsScanned = scanProcesses(ctx), true
 			}
-			pid, err := strconv.Atoi(strings.TrimSpace(panePID))
-			if err != nil {
-				continue
-			}
-			if agent = procs.agentInTree(pid); agent == "" {
+			if agent = procs.agentInTree(p.pid); agent == "" {
 				continue
 			}
 		}
 
-		key := sname + ":" + wIdx + "." + pIdx // e.g. "notes:0.1"
+		key := p.key // e.g. "notes:0.1"
 		target := "=" + key
 		seen[key] = true
 
@@ -563,7 +605,7 @@ func update(ctx context.Context) {
 		if !ok {
 			color, _ := captureColor(ctx, target, paneLines)
 			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting,
-				lastPane: stripANSI(color), colorPane: color}
+				lastActivity: activityKey(stripANSI(color)), colorPane: color}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
 			// newer one.
@@ -574,6 +616,7 @@ func update(ctx context.Context) {
 			continue
 		}
 		s.agent = agent
+		s.visible = p.visible
 
 		// Hold "..." until we have observed the pane for at least idleThreshold.
 		if s.state == StateStarting && time.Since(s.lastChange) < idleThreshold {
@@ -587,12 +630,13 @@ func update(ctx context.Context) {
 		pane := stripANSI(color)
 		s.colorPane = color
 
+		// Only the agent's own output counts as activity: see activityKey.
 		// The title joins the change check because classify keys on it: a live
 		// spinner animates its frames, a stale one freezes, and only a changing
 		// title keeps that pane Active.
-		if pane != s.lastPane || title != s.lastTitle {
+		if activity := activityKey(pane); activity != s.lastActivity || title != s.lastTitle {
 			s.lastChange = time.Now()
-			s.lastPane = pane
+			s.lastActivity = activity
 			s.lastTitle = title
 		}
 
@@ -763,6 +807,36 @@ func promptMarker(line string) (string, bool) {
 	return "", false
 }
 
+// activityLines is how much of the transcript's tail activityKey compares.
+// The tail rather than the whole: a growing input box pushes the top of the
+// transcript off the screen, but leaves the lines just above it in place.
+const activityLines = 20
+
+// activityKey is the part of a pane that changes when the agent works: the
+// bottom of its transcript, spinner line included, without the input box and
+// the footer under it. Comparing whole captures, the user typing a prompt
+// read as the agent running — and when they stopped, as a turn that had just
+// ended, which rang the bell.
+func activityKey(pane string) string {
+	lines := aboveInput(paneText(pane))
+	// A bordered input box (Gemini CLI, Claude Code's older UI) is cut at its
+	// bottom edge by aboveInput, leaving the box's body, where the typing
+	// shows, on the transcript side. Cut it at its top edge instead.
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.ContainsRune(lines[i], '╭') {
+			lines = lines[:i]
+			break
+		}
+		if !strings.ContainsRune(lines[i], '│') {
+			break
+		}
+	}
+	if len(lines) > activityLines {
+		lines = lines[len(lines)-activityLines:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // aboveInput cuts a pane down to its transcript, dropping the live input line
 // and everything under it.
 //
@@ -917,6 +991,19 @@ func nameColumnWidth(names []string, w int) int {
 // icon, then the tmux session name, or the full "session:W.P" key when that
 // session has more than one agent pane.
 func displayNames(names []string) []string {
+	out := sessionNames(names)
+	for i, key := range names {
+		// The icon rides inside the session column rather than taking a
+		// column of its own, which would cost the prompt column ten chars.
+		out[i] = agentIcon(sessions[key].agent) + " " + out[i]
+	}
+	return out
+}
+
+// sessionNames are the names the user knows the panes by, in the order given:
+// the tmux session name, or the full "session:W.P" key when that session has
+// more than one agent pane.
+func sessionNames(names []string) []string {
 	sessionCount := map[string]int{}
 	for _, key := range names {
 		sessionCount[strings.SplitN(key, ":", 2)[0]]++
@@ -927,11 +1014,45 @@ func displayNames(names []string) []string {
 		if sessionCount[name] > 1 {
 			name = key
 		}
-		// The icon rides inside the session column rather than taking a
-		// column of its own, which would cost the prompt column ten chars.
-		out[i] = agentIcon(sessions[key].agent) + " " + name
+		out[i] = name
 	}
 	return out
+}
+
+// iconSet is the pair of symbols drawn in the left margin of a row: one for a
+// session with the bell on, one for a session whose notification has not
+// been seen yet. Each is a single column, followed by a space.
+type iconSet struct {
+	bell, unread string
+}
+
+// iconSets are the choices for the icons setting.
+//
+// The app cannot bring a font with it — the terminal draws with the fonts of
+// the machine it runs on — and no terminal reports whether a glyph actually
+// rendered, so the default must be symbols every font can be relied on for.
+// The geometric shapes below are in DejaVu Sans Mono (which Hack, Konsole's
+// default, and Menlo derive from), JetBrains Mono, Liberation Mono and
+// FreeMono, and DejaVu is the fallback font on nearly every Linux system.
+//
+// The Nerd Font glyphs are Font Awesome's bell and bell-outline, from the part
+// of the Nerd Fonts range that kept its codepoints from v2 to v3; most of
+// the Material Design icons were moved in v3.
+var iconSets = map[string]iconSet{
+	"unicode": {bell: "◇", unread: "◆"},
+	"nerd":    {bell: "\uf0a2", unread: "\uf0f3"},
+	"ascii":   {bell: "o", unread: "!"},
+}
+
+const defaultIcons = "unicode"
+
+// icons is the configured icon set; an unknown name falls back to the default
+// (and --doctor says so).
+func icons() iconSet {
+	if set, ok := iconSets[strings.ToLower(cfg.Icons)]; ok {
+		return set
+	}
+	return iconSets[defaultIcons]
 }
 
 func renderDashboard(selected int, preview bool) {
@@ -986,11 +1107,22 @@ func renderDashboard(selected int, preview bool) {
 			if text == "" {
 				text = s.desc
 			}
-			// "  " (2) + pointer (2) = 4 chars before name, matches header indent
-			fmt.Fprintf(&b, "  %s%s%-*s%s  %s%-*s%s  %s%s%s\n",
-				pointer,
+			// The left margin carries the bell: a dim mark while it is on,
+			// a bold one for a notification not seen yet. Only the mark
+			// changes: a bold name would read as the selected row.
+			margin := "  "
+			switch {
+			case s.unread:
+				margin = "\033[1;33m" + icons().unread + reset + " "
+			case s.bell:
+				margin = "\033[2;33m" + icons().bell + reset + " "
+			}
+			state := s.state.color() + fmt.Sprintf("%-*s", stateWidth, s.state.label()) + reset
+			// margin (2) + pointer (2) = 4 chars before name, matches header indent
+			fmt.Fprintf(&b, "%s%s%s%-*s%s  %s  %s%s%s\n",
+				margin, pointer,
 				nameStyle, nameWidth, truncate(labels[i], nameWidth), reset,
-				s.state.color(), stateWidth, s.state.label(), reset,
+				state,
 				dim, truncate(text, descWidth), reset,
 			)
 		}
@@ -1025,7 +1157,7 @@ func renderDashboard(selected int, preview bool) {
 		}
 	}
 
-	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   p preview   q quit%s\n", dim, reset)
+	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   b bell   p preview   q quit%s\n", dim, reset)
 	b.WriteString("\033[J")
 
 	// raw mode clears OPOST/ONLCR so \n no longer implies \r; use \r\n explicitly.

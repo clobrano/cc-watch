@@ -470,3 +470,91 @@ func TestClipColumnsSkipsEscapes(t *testing.T) {
 		t.Errorf("clipColumns kept = %q", got)
 	}
 }
+
+func TestIcons(t *testing.T) {
+	old := cfg
+	defer func() { cfg = old }()
+	for name, want := range map[string]iconSet{
+		"":        iconSets["unicode"],
+		"nerd":    iconSets["nerd"],
+		"ASCII":   iconSets["ascii"],
+		"bogus":   iconSets["unicode"],
+		"unicode": {bell: "◇", unread: "◆"},
+	} {
+		cfg.Icons = name
+		if got := icons(); got != want {
+			t.Errorf("icons() with %q = %+v, want %+v", name, got, want)
+		}
+	}
+	// Every symbol must fit the one column the margin gives it.
+	for name, set := range iconSets {
+		for _, s := range []string{set.bell, set.unread} {
+			if w := len([]rune(s)); w != 1 || runeColumns([]rune(s)[0]) != 1 {
+				t.Errorf("%s icon %q is not a single one-column rune", name, s)
+			}
+		}
+	}
+}
+
+// claudeBorderlessPane is Claude Code's current UI: no box, the input marked
+// by a chevron between two rules.
+const claudeBorderlessPane = `
+❯ add a retry to the fetch helper
+
+● Added a retry with backoff to fetchJSON; tests pass.
+
+─────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────
+  ? for shortcuts
+`
+
+func TestActivityKeyIgnoresTyping(t *testing.T) {
+	cases := []struct {
+		name, idle, typed string
+	}{
+		{"gemini", geminiPane, strings.Replace(geminiPane,
+			"│ > Type your message or @path/to/file                        │",
+			"│ > fix the flaky test in the integration suite please        │\n"+
+				"│   and then run it ten times                                 │", 1)},
+		{"claude bordered", claudePane, strings.Replace(strings.Replace(claudePane,
+			"│ >                                                           │",
+			"│ > now update the README                                     │", 1),
+			"? for shortcuts", "esc to clear", 1)},
+		{"claude borderless", claudeBorderlessPane, strings.Replace(claudeBorderlessPane,
+			"❯ \n", "❯ now update the README and\n  the changelog too\n", 1)},
+		{"codex", codexPane, strings.Replace(strings.Replace(codexPane,
+			"› Ask Codex to do anything", "› now update the README", 1),
+			"← for agents · ? for shortcuts", "⏎ send", 1)},
+		{"pi", piPane, strings.Replace(piPane,
+			" half-typed follow-up", " half-typed follow-up, now longer", 1)},
+	}
+	for _, c := range cases {
+		if c.idle == c.typed {
+			t.Fatalf("%s: the typed fixture is unchanged; fix the test", c.name)
+		}
+		if activityKey(c.idle) != activityKey(c.typed) {
+			t.Errorf("%s: typing changed the activity key:\n%q\n%q", c.name,
+				activityKey(c.idle), activityKey(c.typed))
+		}
+	}
+}
+
+func TestActivityKeySeesTheAgentWork(t *testing.T) {
+	cases := []struct {
+		name, before, after string
+	}{
+		{"gemini spinner", strings.Replace(geminiPane, "Loaded cached credentials.", "⠋ Thinking (esc to cancel, 1s)", 1),
+			strings.Replace(geminiPane, "Loaded cached credentials.", "⠙ Thinking (esc to cancel, 2s)", 1)},
+		{"claude output", claudePane, strings.Replace(claudePane, "Done. Tests pass.", "Done. Tests pass.\n● Running go vet", 1)},
+		{"claude borderless spinner",
+			strings.Replace(claudeBorderlessPane, "tests pass.\n", "tests pass.\n\n✻ Pondering… (esc to interrupt)\n", 1),
+			strings.Replace(claudeBorderlessPane, "tests pass.\n", "tests pass.\n\n✶ Pondering… (esc to interrupt)\n", 1)},
+		{"codex", codexPane, strings.Replace(codexPane, "covers 429.", "covers 429.\n\n• Working (3s • esc to interrupt)", 1)},
+	}
+	for _, c := range cases {
+		if activityKey(c.before) == activityKey(c.after) {
+			t.Errorf("%s: the agent's output did not change the activity key", c.name)
+		}
+	}
+}

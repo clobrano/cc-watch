@@ -86,6 +86,11 @@ From those two signals it derives a state:
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
 
+"Output" here means the agent's own: the transcript above its input. What you
+type into the input box, and the hints the footer shows as you type, are left
+out, so typing a prompt does not make a waiting agent look like it is running
+(or, once you stop, set off its [bell](#notifications)).
+
 Each row is marked with the agent running in it — `CL` for Claude Code, `CX` for
 Codex, `GM` for Gemini CLI, `OC` for opencode — so a screen of mixed sessions
 stays readable. The mark rides at the front of the session column rather than
@@ -174,6 +179,7 @@ cc-watch
 | --------------- | ------------------------- |
 | `↑` / `↓`       | Move the selection        |
 | `↵` (Enter)     | Attach to the selected pane's session |
+| `b`             | Turn the [bell](#notifications) on or off for the selected session |
 | `p`             | Show or hide the preview  |
 | `q` / `Ctrl-C`  | Quit                      |
 
@@ -211,6 +217,79 @@ once on the same poller. Quitting a dashboard leaves the daemon running.
 | `--serve`       | Start the background [daemon](#daemon-mode) without opening a dashboard |
 | `--stop-server` | Stop the running daemon                                                 |
 | `--doctor`      | Report what cc-watch sees in every pane, then exit — see [Troubleshooting](#troubleshooting) |
+| `--notify-test` | Send a test desktop notification the way the daemon would, and report any error |
+
+## Notifications
+
+Press `b` on a session to turn on its bell; the row is marked with a dim `◇` in
+the left margin (see [Icons](#icons) for other symbols). When a session with the bell on finishes a turn, going from
+`running` to `waiting`, you get a desktop notification titled after the session —
+"notes is waiting", or "notes:0.1 is waiting" when that tmux session has more
+than one agent pane — with its last prompt as the body.
+
+The notification waits until the session has stayed `waiting` for `notify_after`
+seconds (10 by default). That comes on top of the 5 seconds of unchanged output
+the classifier already needs before it calls a pane `waiting`, so a pause in the
+middle of a turn does not set off the bell for an agent that is about to carry on.
+Each turn sends one notification. Turning the bell on for a session that has been
+waiting for a while does not send one; the next finished turn does.
+
+Until you get to it, the session is flagged in the dashboard: the mark turns
+into a bold `◆`.
+
+```
+◇   CL api                    running    add rate limiting to the /search endpoint
+◆ > CL notes                  waiting    fix the parser
+```
+
+The flag clears as soon as you have been to the session: when it is on screen in
+tmux (the active pane of the active window of an attached session), when you
+attach to it from the dashboard, when it starts running again because you
+answered it from elsewhere, or when you turn its bell off.
+
+The bell belongs to the daemon, not the dashboard, so the notification arrives
+whether or not a dashboard is open. Bells last as long as the daemon and the
+pane: restarting the daemon, or closing the pane, turns them off.
+
+### Icons
+
+The `icons` setting picks the symbols the margin is drawn with:
+
+| `icons`             | Bell on | Not seen yet | Needs                                              |
+| ------------------- | ------- | ------------ | -------------------------------------------------- |
+| `unicode` (default) | `◇`     | `◆`          | Nothing: DejaVu Sans Mono (and Hack and Menlo, which derive from it), JetBrains Mono, Liberation Mono and FreeMono all have them, and DejaVu is the fallback font on nearly every Linux system |
+| `nerd`              | `` | `` | A [Nerd Font](https://www.nerdfonts.com/), or the symbols-only Nerd Font installed as a fallback. These are Font Awesome's bell outline (U+F0A2) and bell (U+F0F3), which kept their codepoints from Nerd Fonts v2 to v3 |
+| `ascii`             | `o`     | `!`          | Nothing at all                                     |
+
+cc-watch cannot bring a font of its own: the terminal draws with the fonts of
+the machine it runs on, and no terminal can tell an application whether a symbol
+actually rendered, so a missing glyph would just be a box. `cc-watch --doctor`
+draws all three sets, so you can see which ones your font has before you pick.
+
+### Notifiers
+
+The daemon sends notifications with the first of these it finds:
+
+| Notifier            | Where                                                      |
+| ------------------- | ---------------------------------------------------------- |
+| `notify_command`    | Your own command, if configured — see [Configuration](#configuration) |
+| `osascript`         | macOS                                                      |
+| `notify-send`       | Linux and BSD: the freedesktop notification service, which KDE Plasma, GNOME, XFCE, dunst, mako and others provide |
+| `gdbus`             | The same service, called directly, for systems without `notify-send` (part of GLib, so almost always present) |
+| `tmux display-message` | Last resort: a message in the tmux status line           |
+
+Run `cc-watch --notify-test` to check that notifications reach your desktop, and
+`cc-watch --doctor` to see which notifier was picked. The daemon has to reach
+your desktop's session bus: started from a terminal in your desktop session it
+inherits `DBUS_SESSION_BUS_ADDRESS`, but a daemon started some other way (an SSH
+login, a service without the user's session environment) may not, and then logs
+the failure to `daemon.log`.
+
+`notify_command` covers anything else — a phone push through ntfy, WSL, a sound:
+
+```json
+{ "notify_command": ["ntfy", "publish", "--title", "{title}", "my-topic", "{body}"] }
+```
 
 ## tmux status bar
 
@@ -417,6 +496,8 @@ Configuration is optional. To override the defaults, create
   "agent_commands": ["claude", "codex", "gemini", "opencode", "pi", "aider"],
   "agent_icons": { "aider": "a" },
   "preview_lines": 30,
+  "notify_after": 10,
+  "icons": "unicode",
   "shell_prompts": ["$", "#", "%", "❯", "→", "λ"]
 }
 ```
@@ -426,6 +507,9 @@ Configuration is optional. To override the defaults, create
 | `agent_commands` | `["claude", "codex", "gemini", "opencode", "pi"]` | Agents to watch. Matched case-insensitively against the pane command (`#{pane_current_command}`) and, for interpreter panes, against the program running below the pane. Add entries to watch other agent CLIs. |
 | `agent_icons`    | `{"claude": "CL", "codex": "CX", "gemini": "GM", "opencode": "OC", "pi": "PI"}` | The mark shown before a session name, per agent. Two-letter ASCII codes by default, so the rows line up in any terminal; set any string (a glyph, a single letter) to override. Unlike the other keys this is *merged over* the defaults rather than replacing them, so naming one agent leaves the rest alone. An agent with no mark of its own gets its uppercased initial. |
 | `preview_lines`  | `30`                                 | How many of the selected pane's last lines the preview shows, at most 60. The terminal height can show fewer. |
+| `notify_after`   | `10`                                 | Seconds a session with the bell on must stay `waiting` before the [notification](#notifications) is sent. |
+| `notify_command` | _(none)_                             | A command to send notifications with instead of the built-in notifier, as an argument list; `{title}` and `{body}` are replaced in each argument. |
+| `icons`          | `"unicode"`                          | The symbols for a session with the bell on and one with a notification not seen yet: `unicode`, `nerd` or `ascii` — see [Icons](#icons). |
 | `shell_prompts`  | `["$", "#", "%", "❯", "→", "λ"]`     | Line suffixes that identify a bare shell prompt. Used to detect that an agent has exited into the shell (`error` state).         |
 
 Any key may be omitted; a missing or empty list falls back to its default. If

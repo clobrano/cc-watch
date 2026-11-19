@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -17,9 +16,10 @@ import (
 // The daemon owns the polling; dashboards are clients of it. It listens on a
 // Unix socket in runtimeDir and streams one JSON snapshot per line: the latest
 // one the moment a client connects, so a dashboard has its full state on its
-// first frame, and a fresh one after every poll. The stream is one-way —
-// clients never write — so any number of dashboards can watch the same daemon
-// without the panes being captured once per dashboard.
+// first frame, and a fresh one after every poll, so any number of dashboards
+// can watch the same daemon without the panes being captured once per
+// dashboard. In the other direction a dashboard sends the odd command, also
+// one JSON object per line: toggling a session's bell, say.
 
 func socketPath() string { return filepath.Join(runtimeDir(), "daemon.sock") }
 
@@ -38,6 +38,41 @@ type snapshotRow struct {
 	Prompt string   `json:"prompt,omitempty"`
 	Desc   string   `json:"desc,omitempty"`
 	Tail   []string `json:"tail,omitempty"`
+	Bell   bool     `json:"bell,omitempty"`
+	Unread bool     `json:"unread,omitempty"`
+}
+
+// command is a request from a dashboard to the daemon, one JSON object per
+// line on the same socket the snapshots arrive on.
+type command struct {
+	// Bell toggles the bell on the named session (a "session:W.P" key).
+	Bell string `json:"bell,omitempty"`
+	// Seen marks the named session's notification as read.
+	Seen string `json:"seen,omitempty"`
+}
+
+// sendCommand writes one command to the daemon.
+func sendCommand(conn net.Conn, c command) error {
+	line, _ := json.Marshal(c) // only strings: cannot fail
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	_, err := conn.Write(append(line, '\n'))
+	return err
+}
+
+// applyCommand carries out a dashboard's command. It runs on the poll
+// goroutine, which owns the sessions map.
+func applyCommand(c command) {
+	if c.Bell != "" {
+		if s, ok := sessions[c.Bell]; ok {
+			s.bell = !s.bell
+			if !s.bell {
+				s.unread = false
+			}
+		}
+	}
+	if s, ok := sessions[c.Seen]; ok {
+		s.unread = false
+	}
 }
 
 type snapshot struct {
@@ -52,6 +87,7 @@ func takeSnapshot() snapshot {
 		snap.Sessions = append(snap.Sessions, snapshotRow{
 			Name: s.name, Agent: s.agent, State: s.state, Prompt: s.prompt, Desc: s.desc,
 			Tail: paneTail(s.colorPane, tailLines),
+			Bell: s.bell, Unread: s.unread,
 		})
 	}
 	return snap
@@ -62,7 +98,7 @@ func takeSnapshot() snapshot {
 func applySnapshot(snap snapshot) {
 	sessions = make(map[string]*session, len(snap.Sessions))
 	for _, r := range snap.Sessions {
-		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail}
+		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail, bell: r.Bell, unread: r.Unread}
 	}
 }
 
@@ -71,9 +107,13 @@ type hub struct {
 	mu      sync.Mutex
 	latest  []byte
 	clients map[chan []byte]struct{}
+	// cmds carries the commands dashboards send to the poll goroutine.
+	cmds chan command
 }
 
-func newHub() *hub { return &hub{clients: map[chan []byte]struct{}{}} }
+func newHub() *hub {
+	return &hub{clients: map[chan []byte]struct{}{}, cmds: make(chan command, 16)}
+}
 
 // publish records line as the latest snapshot and hands it to every client.
 // Each client has a one-slot mailbox: a client still busy writing the previous
@@ -127,13 +167,18 @@ func (h *hub) serveConn(conn net.Conn) {
 	ch := h.subscribe()
 	defer h.unsubscribe(ch)
 
-	// Clients send nothing, so a read returning means the client has gone.
-	// Without this a client that quits between polls would only be noticed on
-	// the next failed write.
+	// Reading also notices a client that has gone: without it a client that
+	// quits between polls would only be noticed on the next failed write.
 	gone := make(chan struct{})
 	go func() {
-		io.Copy(io.Discard, conn)
-		close(gone)
+		defer close(gone)
+		sc := bufio.NewScanner(conn)
+		for sc.Scan() {
+			var c command
+			if json.Unmarshal(sc.Bytes(), &c) == nil {
+				h.cmds <- c
+			}
+		}
 	}()
 
 	for {

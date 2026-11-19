@@ -102,6 +102,8 @@ func reportConfig() {
 		}
 	}
 	fmt.Printf("agents:  %s\n", strings.Join(cfg.AgentCommands, ", "))
+	fmt.Printf("notify:  %s (try it with --notify-test)\n", findNotifier().name)
+	reportIcons()
 
 	// Naming the built-ins that are missing, rather than one agent the check was
 	// written for, is what keeps this warning useful the next agent along.
@@ -134,12 +136,35 @@ type paneInfo struct {
 	key     string
 	command string
 	pid     int
+	visible bool // on someone's screen: see paneFormat
+}
+
+// reportIcons draws every icon set, since only the user can see whether their
+// font has the glyphs: a missing one shows as a box or a blank.
+func reportIcons() {
+	name := strings.ToLower(cfg.Icons)
+	if name == "" {
+		name = defaultIcons
+	}
+	if _, ok := iconSets[name]; !ok {
+		fmt.Printf("icons:   %q is not an icon set; using %q\n", cfg.Icons, defaultIcons)
+		name = defaultIcons
+	}
+	fmt.Printf("icons:   %s\n", name)
+	for _, n := range []string{"unicode", "nerd", "ascii"} {
+		set := iconSets[n]
+		fmt.Printf("           %-8s bell on %s   not seen yet %s\n", n, set.bell, set.unread)
+	}
+	fmt.Println("         Pick a set whose symbols all show above; a box or a blank means")
+	fmt.Println("         the terminal's font lacks them. Set it with \"icons\" in the config.")
 }
 
 // parsePane reads one line of paneFormat output.
 func parsePane(line string) (paneInfo, bool) {
-	fields := strings.SplitN(line, "|", 5)
-	if len(fields) != 5 {
+	// session_name comes last because it is the only field a user can put a
+	// '|' into — SplitN's limit then keeps such a name intact.
+	fields := strings.SplitN(line, "|", 6)
+	if len(fields) != 6 {
 		return paneInfo{}, false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(fields[2]))
@@ -147,8 +172,9 @@ func parsePane(line string) (paneInfo, bool) {
 		return paneInfo{}, false
 	}
 	return paneInfo{
-		key:     fields[4] + ":" + fields[0] + "." + fields[1],
+		key:     fields[5] + ":" + fields[0] + "." + fields[1],
 		command: strings.TrimSpace(fields[3]),
 		pid:     pid,
+		visible: fields[4] == "1",
 	}, true
 }
