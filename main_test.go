@@ -558,3 +558,32 @@ func TestActivityKeySeesTheAgentWork(t *testing.T) {
 		}
 	}
 }
+
+func TestSpinnerFrames(t *testing.T) {
+	// pi thinking: the spinner in the status lines under the editor, where
+	// activityKey does not look.
+	thinking := strings.Replace(piPane, "~/project (main)", "~/project (main)\n⠋ Thinking...", 1)
+	if got := spinnerFrames(thinking, ""); got != "⠋ Thinking..." {
+		t.Errorf("spinnerFrames = %q, want the spinner line", got)
+	}
+	if activityKey(thinking) != activityKey(piPane) {
+		t.Fatal("test premise: the spinner under the editor is outside activityKey")
+	}
+	next := strings.Replace(thinking, "⠋", "⠙", 1)
+	if spinnerFrames(thinking, "") == spinnerFrames(next, "") {
+		t.Error("a turned spinner gives the same frames")
+	}
+
+	// Claude Code's spinner lives in the title.
+	if got := spinnerFrames(claudePane, "⠐ Fixing the parser"); got != "⠐ Fixing the parser" {
+		t.Errorf("spinnerFrames with a spinner title = %q", got)
+	}
+
+	// Nothing to recheck on a pane without one; the blank braille pattern
+	// (U+2800) is padding, not a spinner.
+	for _, p := range []string{geminiPane, claudePane, codexPane, piPane, "⠀⠀⠀"} {
+		if got := spinnerFrames(p, "✳ Claude Code"); got != "" {
+			t.Errorf("spinnerFrames(%.20q) = %q, want none", p, got)
+		}
+	}
+}
