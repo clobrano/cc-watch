@@ -126,3 +126,22 @@ func TestUnreadLifecycle(t *testing.T) {
 		t.Fatal("still unread after a seen command")
 	}
 }
+
+func TestStatusStripMarksUnread(t *testing.T) {
+	oldS, oldC := sessions, cfg
+	defer func() { sessions, cfg = oldS, oldC }()
+	cfg.Icons = ""
+	sessions = map[string]*session{
+		"%1": {name: "api:0.0", state: StateActive},
+		"%2": {name: "notes:0.0", state: StateWaiting, bell: true, unread: true},
+		"%3": {name: "zeta:0.0", state: StateWaiting, bell: true},
+	}
+	want := "#[fg=yellow]1 #[fg=yellow,bold]◆#[fg=green]2#[nobold] #[fg=green]3#[default]"
+	if got := statusStrip(); got != want {
+		t.Errorf("statusStrip =\n%q\nwant\n%q", got, want)
+	}
+	sessions = map[string]*session{}
+	if got := statusStrip(); got != "" {
+		t.Errorf("statusStrip with no sessions = %q, want empty", got)
+	}
+}

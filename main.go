@@ -1384,19 +1384,31 @@ func runeColumns(r rune) int {
 // when a pane appears or dies. The option is inert until referenced, so the
 // user places it themselves: set -ag status-right ' #{@cc_watch_agents}'.
 func updateStatusBar(ctx context.Context) {
+	setStatusOption(ctx, statusStrip())
+}
+
+// statusStrip is the value updateStatusBar publishes. A session with a
+// notification not seen yet carries the same mark it has in the dashboard,
+// bold yellow before its number, and its number in bold.
+func statusStrip() string {
 	var b strings.Builder
 	for i, key := range sortedNames() {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
-		// Trailing #[default] stops our colour leaking into whatever the user
-		// has placed after the strip in their status format.
-		fmt.Fprintf(&b, "#[fg=%s]%d", sessions[key].state.tmuxColor(), i+1)
+		s := sessions[key]
+		if s.unread {
+			fmt.Fprintf(&b, "#[fg=yellow,bold]%s#[fg=%s]%d#[nobold]", icons().unread, s.state.tmuxColor(), i+1)
+			continue
+		}
+		fmt.Fprintf(&b, "#[fg=%s]%d", s.state.tmuxColor(), i+1)
 	}
+	// Trailing #[default] stops our colour leaking into whatever the user
+	// has placed after the strip in their status format.
 	if b.Len() > 0 {
 		b.WriteString("#[default]")
 	}
-	setStatusOption(ctx, b.String())
+	return b.String()
 }
 
 var lastStatus string // last value pushed, so unchanged polls cause no redraw

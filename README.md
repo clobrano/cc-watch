@@ -335,6 +335,17 @@ You then get an at-a-glance indicator from any session:
                                                      └───── yellow: running
 ```
 
+An agent with a [notification](#notifications) you have not seen yet carries the
+same mark it has in the dashboard, bold yellow before its number, and its number
+is bold:
+
+```
+                                              AGENTS 1 ◆2 3
+                                                        └─ notified, not seen yet
+```
+
+The mark comes from your [icon set](#icons), and goes when the dashboard's does.
+
 The numbers are positional over the same sorted list the dashboard renders, so
 agent `2` in the status bar is row 2 in the TUI — the TUI is the legend that tells
 you which session that is. Because they are positional, they renumber whenever an
