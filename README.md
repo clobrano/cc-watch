@@ -338,8 +338,8 @@ You then get an at-a-glance indicator from any session:
 
 Every agent gets the empty mark of your [icon set](#icons) (`◇`, or the Nerd
 Font bell outline). One with a [notification](#notifications) you have not seen
-yet gets the full mark instead (`◆`, or the solid bell), in bold, until the
-dashboard's mark goes too. The marks are in the order the dashboard lists the
+yet gets the full mark instead (`◆`, or the solid bell), in bold yellow whatever
+its state, as in the dashboard, until the dashboard's mark goes too. The marks are in the order the dashboard lists the
 agents, so the dashboard is the legend that tells you which session is which,
 and its header gives the count — `6 agents · 1 running`.
 

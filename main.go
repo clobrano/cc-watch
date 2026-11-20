@@ -1408,7 +1408,8 @@ func updateStatusBar(ctx context.Context) {
 
 // statusStrip is the value updateStatusBar publishes: the icon set's empty
 // mark for every agent, coloured by its state, turned into the full mark, in
-// bold, for one with a notification not seen yet. Marks rather than numbers:
+// bold yellow, for one with a notification not seen yet — yellow whatever its
+// state, as in the dashboard's margin, so it stands out until it is seen. Marks rather than numbers:
 // a strip of icons reads at a glance, and the dashboard's header carries the
 // count. The space between marks also leaves room for a glyph the font draws
 // wider than its cell, as many Nerd Font icons are, which would otherwise
@@ -1421,7 +1422,7 @@ func statusStrip() string {
 		}
 		s := sessions[key]
 		if s.unread {
-			fmt.Fprintf(&b, "#[fg=%s,bold]%s#[nobold]", s.state.tmuxColor(), icons().unread)
+			fmt.Fprintf(&b, "#[fg=yellow,bold]%s#[nobold]", icons().unread)
 			continue
 		}
 		fmt.Fprintf(&b, "#[fg=%s]%s", s.state.tmuxColor(), icons().bell)
