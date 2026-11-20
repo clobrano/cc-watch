@@ -81,7 +81,7 @@ From those two signals it derives a state:
 | --------- | ------ | ---------------------------------------------------------------------------- |
 | `...`     | grey   | Pane seen for the first time; held until enough output has been observed to classify |
 | `running` | yellow | The agent is working — a braille spinner in the pane title, or output still changing |
-| `waiting` | green  | The agent is sitting at its input and nothing has changed for 5 seconds. Two shapes are recognised: the box Gemini CLI and older Claude Code builds draw around the input, and the bare marker line Codex and newer Claude Code builds use instead |
+| `waiting` | blue   | The agent is sitting at its input and nothing has changed for 5 seconds. Two shapes are recognised: the box Gemini CLI and older Claude Code builds draw around the input, and the bare marker line Codex and newer Claude Code builds use instead |
 | `idle`    | yellow | Output has been unchanged for 5 seconds with no input on screen               |
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
@@ -330,7 +330,7 @@ You then get an at-a-glance indicator from any session:
 
 ```
                                               AGENTS ◇ ◆ ◇ ◇
-                                                     │ │ │ └─ green:  waiting on you
+                                                     │ │ │ └─ blue:   waiting on you
                                                      │ │ └─── grey:   idle
                                                      │ └───── notified, not seen yet
                                                      └─────── yellow: running
@@ -354,7 +354,7 @@ To check the strip is live while the daemon is running, read the raw option:
 
 ```sh
 $ tmux show-options -gqv @cc_watch_agents
-#[fg=yellow]1 #[fg=green]2#[default]
+#[fg=yellow]◇ #[fg=blue]◇#[default]
 ```
 
 Empty output means either cc-watch is not running or it found no agents.

@@ -136,7 +136,7 @@ func TestStatusStripMarksUnread(t *testing.T) {
 		"%2": {name: "notes:0.0", state: StateWaiting, bell: true, unread: true},
 		"%3": {name: "zeta:0.0", state: StateWaiting, bell: true},
 	}
-	want := "#[fg=yellow]◇ #[fg=green,bold]◆#[nobold] #[fg=green]◇#[default]"
+	want := "#[fg=yellow]◇ #[fg=blue,bold]◆#[nobold] #[fg=blue]◇#[default]"
 	if got := statusStrip(); got != want {
 		t.Errorf("statusStrip =\n%q\nwant\n%q", got, want)
 	}

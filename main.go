@@ -220,11 +220,11 @@ func (s State) tmuxColor() string {
 	case StateActive:
 		return "yellow"
 	case StateWaiting:
-		return "green"
+		return "blue"
 	case StateIdle:
 		return "colour244"
 	case StateStarting:
-		return "blue"
+		return "colour244"
 	case StateError:
 		return "red"
 	default:
@@ -235,13 +235,15 @@ func (s State) tmuxColor() string {
 func (s State) color() string {
 	switch s {
 	case StateStarting:
-		return "\033[34m" // blue
+		return "\033[90m" // bright-black (gray): a few seconds at most
 	case StateActive:
 		return "\033[33m" // yellow
 	case StateIdle:
 		return "\033[90m" // bright-black (gray)
 	case StateWaiting:
-		return "\033[32m" // green
+		// Blue rather than green: next to running's yellow, green is hard to
+		// tell apart in the thin strokes of the status strip's marks.
+		return "\033[34m" // blue
 	case StateError:
 		return "\033[31m" // red
 	default:
