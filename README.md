@@ -10,7 +10,7 @@ and which one has quit. `cc-watch` polls tmux, classifies every agent pane, and
 lets you jump straight to the one that needs you.
 
 ```
-  cc-watch  15:04:05
+  cc-watch  15:04:05   5 agents · 1 running
 
     SESSION                   STATE      LAST PROMPT
     ──────────────────────────────────────────────────────────────────────────
@@ -302,7 +302,7 @@ the failure to `daemon.log`.
 ## tmux status bar
 
 While it runs, the cc-watch daemon publishes a compact strip of every agent it has found to
-the tmux user option `@cc_watch_agents` — one number per agent, coloured by the
+the tmux user option `@cc_watch_agents` — one mark per agent, coloured by the
 same states as the dashboard. It is nothing but an option until you reference it,
 so add it wherever you want in your `.tmux.conf`:
 
@@ -313,7 +313,7 @@ set -g  status-right-length 60
 
 `-a` appends rather than replacing, so your existing clock and hostname survive.
 The length bump matters: `status-right-length` defaults to 40 and tmux truncates
-past it silently, so on a busy status line the agent digits are exactly what falls
+past it silently, so on a busy status line the agent marks are exactly what falls
 off the end — which looks like the feature not working. Put it on the left instead
 if you prefer, but raise the limit there too, as `status-left-length` defaults to
 just 10:
@@ -329,28 +329,19 @@ Reload with `tmux source-file ~/.tmux.conf`. You do not need to touch
 You then get an at-a-glance indicator from any session:
 
 ```
-                                              AGENTS 1 2 3
-                                                     │ │ └─ green:  waiting on you
-                                                     │ └─── grey:   idle
-                                                     └───── yellow: running
+                                              AGENTS ◇ ◆ ◇ ◇
+                                                     │ │ │ └─ green:  waiting on you
+                                                     │ │ └─── grey:   idle
+                                                     │ └───── notified, not seen yet
+                                                     └─────── yellow: running
 ```
 
-An agent with a [notification](#notifications) you have not seen yet carries the
-same mark it has in the dashboard, bold yellow before its number, and its number
-is bold:
-
-```
-                                              AGENTS 1 ◆2 3
-                                                        └─ notified, not seen yet
-```
-
-The mark comes from your [icon set](#icons), and goes when the dashboard's does.
-
-The numbers are positional over the same sorted list the dashboard renders, so
-agent `2` in the status bar is row 2 in the TUI — the TUI is the legend that tells
-you which session that is. Because they are positional, they renumber whenever an
-agent pane appears or dies: a number is a pointer to a row, not a durable handle
-on a session.
+Every agent gets the empty mark of your [icon set](#icons) (`◇`, or the Nerd
+Font bell outline). One with a [notification](#notifications) you have not seen
+yet gets the full mark instead (`◆`, or the solid bell), in bold, until the
+dashboard's mark goes too. The marks are in the order the dashboard lists the
+agents, so the dashboard is the legend that tells you which session is which,
+and its header gives the count — `6 agents · 1 running`.
 
 The strip is pushed on each 2-second poll, but the option is only rewritten (and
 clients only redrawn, via `refresh-client -S`) when the rendered string actually

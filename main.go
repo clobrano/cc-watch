@@ -1121,6 +1121,25 @@ func sessionNames(keys []string) []string {
 	return out
 }
 
+// agentCount is the header's summary, e.g. "   6 agents · 1 running": the
+// count the tmux status strip, which shows only marks, does not give.
+func agentCount() string {
+	if len(sessions) == 0 {
+		return ""
+	}
+	running := 0
+	for _, s := range sessions {
+		if s.state == StateActive {
+			running++
+		}
+	}
+	noun := "agents"
+	if len(sessions) == 1 {
+		noun = "agent"
+	}
+	return fmt.Sprintf("   %d %s · %d running", len(sessions), noun, running)
+}
+
 // iconSet is the pair of symbols drawn in the left margin of a row: one for a
 // session with the bell on, one for a session whose notification has not
 // been seen yet. Each is a single column, followed by a space.
@@ -1183,7 +1202,7 @@ func renderDashboard(selected int, preview bool) {
 	b.WriteString("\033[2J\033[H") // clear entire screen, go home
 
 	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
+	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s%s\n\n", bold, reset, dim, ts, agentCount(), reset)
 	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
 	fmt.Fprintf(&b, "    %s%-*s  %-*s  %s%s\n", bold,
 		nameWidth, "SESSION", stateWidth, "STATE", "LAST PROMPT", reset)
@@ -1377,19 +1396,21 @@ func runeColumns(r rune) int {
 	return 1
 }
 
-// updateStatusBar publishes a numbered, state-coloured strip of the detected
-// agents to a tmux user option, e.g. "1 2 3" with 1 yellow and 2 green. The
-// numbers are positional over the same sorted list the TUI renders, so agent N
-// in the status bar is row N in the dashboard — which also means they shift
-// when a pane appears or dies. The option is inert until referenced, so the
-// user places it themselves: set -ag status-right ' #{@cc_watch_agents}'.
+// updateStatusBar publishes a strip of the detected agents to a tmux user
+// option: one icon per agent, in the order the dashboard lists them, coloured
+// by state. The option is inert until referenced, so the user places it
+// themselves: set -ag status-right ' #{@cc_watch_agents}'.
 func updateStatusBar(ctx context.Context) {
 	setStatusOption(ctx, statusStrip())
 }
 
-// statusStrip is the value updateStatusBar publishes. A session with a
-// notification not seen yet carries the same mark it has in the dashboard,
-// bold yellow before its number, and its number in bold.
+// statusStrip is the value updateStatusBar publishes: the icon set's empty
+// mark for every agent, coloured by its state, turned into the full mark, in
+// bold, for one with a notification not seen yet. Marks rather than numbers:
+// a strip of icons reads at a glance, and the dashboard's header carries the
+// count. The space between marks also leaves room for a glyph the font draws
+// wider than its cell, as many Nerd Font icons are, which would otherwise
+// run into the next one.
 func statusStrip() string {
 	var b strings.Builder
 	for i, key := range sortedNames() {
@@ -1398,10 +1419,10 @@ func statusStrip() string {
 		}
 		s := sessions[key]
 		if s.unread {
-			fmt.Fprintf(&b, "#[fg=yellow,bold]%s#[fg=%s]%d#[nobold]", icons().unread, s.state.tmuxColor(), i+1)
+			fmt.Fprintf(&b, "#[fg=%s,bold]%s#[nobold]", s.state.tmuxColor(), icons().unread)
 			continue
 		}
-		fmt.Fprintf(&b, "#[fg=%s]%d", s.state.tmuxColor(), i+1)
+		fmt.Fprintf(&b, "#[fg=%s]%s", s.state.tmuxColor(), icons().bell)
 	}
 	// Trailing #[default] stops our colour leaking into whatever the user
 	// has placed after the strip in their status format.
