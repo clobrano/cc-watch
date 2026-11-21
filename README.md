@@ -176,8 +176,11 @@ Or build from a clone:
 ```sh
 git clone https://github.com/clobrano/cc-watch
 cd cc-watch
-go build -o cc-watch .
+make            # builds ./cc-watch; `make install` puts it in $GOBIN instead
 ```
+
+`make help` lists the other targets: `test`, `demo` (records the README's
+animation, see [Recording the demo](#recording-the-demo)) and `clean`.
 
 ## Usage
 
@@ -544,11 +547,10 @@ promptScrollback = 400              // one-off deeper capture, to find the promp
 ## Recording the demo
 
 The animation at the top is recorded with [VHS](https://github.com/charmbracelet/vhs)
-from `demo/demo.tape`. To record it again, from the repository root, with `vhs`,
-`tmux` and `go` installed:
+from `demo/demo.tape`. To record it again, with `vhs`, `tmux` and `go` installed:
 
 ```sh
-vhs demo/demo.tape
+make demo
 ```
 
 It runs on a private tmux server (`tmux -L cc-watch-demo`) with scripted stand-in
