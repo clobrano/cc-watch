@@ -1,0 +1,7 @@
+#!/bin/bash
+. "$(dirname "$0")/../agent.sh"
+printf '› document the new --serve flag\n\n'
+printf '• Explored\n  └ Read daemon.go, README.md\n\n'
+printf '• Added a "Daemon mode" section to README.md.\n'
+composer
+idle

@@ -32,6 +32,7 @@ const writeTimeout = 5 * time.Second
 const maxSnapshot = 1 << 20
 
 type snapshotRow struct {
+	ID     string   `json:"id,omitempty"` // tmux pane id; the key commands use
 	Name   string   `json:"name"`
 	Agent  string   `json:"agent"`
 	State  State    `json:"state"`
@@ -45,9 +46,9 @@ type snapshotRow struct {
 // command is a request from a dashboard to the daemon, one JSON object per
 // line on the same socket the snapshots arrive on.
 type command struct {
-	// Bell toggles the bell on the named session (a "session:W.P" key).
+	// Bell toggles the bell on the given session (its key: the pane id).
 	Bell string `json:"bell,omitempty"`
-	// Seen marks the named session's notification as read.
+	// Seen marks the given session's notification as read.
 	Seen string `json:"seen,omitempty"`
 }
 
@@ -85,7 +86,7 @@ func takeSnapshot() snapshot {
 	for _, key := range sortedNames() {
 		s := sessions[key]
 		snap.Sessions = append(snap.Sessions, snapshotRow{
-			Name: s.name, Agent: s.agent, State: s.state, Prompt: s.prompt, Desc: s.desc,
+			ID: s.id, Name: s.name, Agent: s.agent, State: s.state, Prompt: s.prompt, Desc: s.desc,
 			Tail: paneTail(s.colorPane, tailLines),
 			Bell: s.bell, Unread: s.unread,
 		})
@@ -98,7 +99,12 @@ func takeSnapshot() snapshot {
 func applySnapshot(snap snapshot) {
 	sessions = make(map[string]*session, len(snap.Sessions))
 	for _, r := range snap.Sessions {
-		sessions[r.Name] = &session{name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail, bell: r.Bell, unread: r.Unread}
+		// An older daemon sends no id; its rows are keyed by name.
+		key := r.ID
+		if key == "" {
+			key = r.Name
+		}
+		sessions[key] = &session{id: r.ID, name: r.Name, agent: r.Agent, state: r.State, prompt: r.Prompt, desc: r.Desc, tail: r.Tail, bell: r.Bell, unread: r.Unread}
 	}
 }
 

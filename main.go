@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -41,8 +42,12 @@ const (
 	// paneFormat is the one list-panes query both the poller and --doctor use.
 	// The fifth field is 1 when the pane is on someone's screen: the active
 	// pane of the active window of a session with a client attached.
+	// The sixth is the pane's id (%12), which every other tmux call targets:
+	// it never changes for the life of the pane, while the session name can
+	// be renamed, and comes back from list-panes mangled when it holds
+	// characters the locale cannot show.
 	paneFormat = "#{window_index}|#{pane_index}|#{pane_pid}|#{pane_current_command}|" +
-		"#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}|#{session_name}"
+		"#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}|#{pane_id}|#{session_name}"
 
 	// statusOption is the tmux user option the agent strip is published to.
 	// Reference it as #{@cc_watch_agents} from status-right/status-left.
@@ -215,11 +220,11 @@ func (s State) tmuxColor() string {
 	case StateActive:
 		return "yellow"
 	case StateWaiting:
-		return "green"
+		return "blue"
 	case StateIdle:
 		return "colour244"
 	case StateStarting:
-		return "blue"
+		return "colour244"
 	case StateError:
 		return "red"
 	default:
@@ -230,13 +235,15 @@ func (s State) tmuxColor() string {
 func (s State) color() string {
 	switch s {
 	case StateStarting:
-		return "\033[34m" // blue
+		return "\033[90m" // bright-black (gray): a few seconds at most
 	case StateActive:
 		return "\033[33m" // yellow
 	case StateIdle:
 		return "\033[90m" // bright-black (gray)
 	case StateWaiting:
-		return "\033[32m" // green
+		// Blue rather than green: next to running's yellow, green is hard to
+		// tell apart in the thin strokes of the status strip's marks.
+		return "\033[34m" // blue
 	case StateError:
 		return "\033[31m" // red
 	default:
@@ -251,7 +258,8 @@ var (
 )
 
 type session struct {
-	name         string
+	id           string // tmux pane id, e.g. "%12": the key in sessions
+	name         string // "session:W.P", refreshed every poll
 	agent        string // which configured agent this pane is running
 	state        State
 	desc         string
@@ -482,7 +490,7 @@ func runTUI() error {
 // (instant, TUI keeps running). Outside tmux it suspends the TUI, runs
 // attach-session as a subprocess, then resumes when the user detaches.
 func attach(ctx context.Context, fd int, key string, rawState **term.State) {
-	target := "=" + key
+	target := tmuxTarget(key)
 	if os.Getenv("TMUX") != "" {
 		exec.CommandContext(ctx, "tmux", "switch-client", "-t", target).Run()
 		return
@@ -600,14 +608,17 @@ func update(ctx context.Context) {
 			}
 		}
 
-		key := p.key // e.g. "notes:0.1"
-		target := "=" + key
+		// Panes are tracked by id, so renaming a session or moving a window
+		// keeps the pane's state — its bell among it — and only relabels it.
+		key, target := p.id, p.id
 		seen[key] = true
 
 		s, ok := sessions[key]
-		if !ok {
+		if ok {
+			s.name = p.key
+		} else {
 			color, _ := captureColor(ctx, target, paneLines)
-			s = &session{name: key, agent: agent, lastChange: time.Now(), state: StateStarting,
+			s = &session{id: p.id, name: p.key, agent: agent, lastChange: time.Now(), state: StateStarting,
 				lastActivity: activityKey(stripANSI(color)), colorPane: color}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
@@ -1085,20 +1096,50 @@ func displayNames(names []string) []string {
 // sessionNames are the names the user knows the panes by, in the order given:
 // the tmux session name, or the full "session:W.P" key when that session has
 // more than one agent pane.
-func sessionNames(names []string) []string {
-	sessionCount := map[string]int{}
-	for _, key := range names {
-		sessionCount[strings.SplitN(key, ":", 2)[0]]++
+// tmuxSession is the session part of a "session:W.P" name. It is cut at the
+// last colon, not the first: tmux allows a colon in a session name, while the
+// window and pane indexes are only digits and a dot.
+func tmuxSession(name string) string {
+	if i := strings.LastIndex(name, ":"); i >= 0 {
+		return name[:i]
 	}
-	out := make([]string, len(names))
-	for i, key := range names {
-		name := strings.SplitN(key, ":", 2)[0]
+	return name
+}
+
+func sessionNames(keys []string) []string {
+	sessionCount := map[string]int{}
+	for _, key := range keys {
+		sessionCount[tmuxSession(sessions[key].name)]++
+	}
+	out := make([]string, len(keys))
+	for i, key := range keys {
+		full := sessions[key].name
+		name := tmuxSession(full)
 		if sessionCount[name] > 1 {
-			name = key
+			name = full
 		}
 		out[i] = name
 	}
 	return out
+}
+
+// agentCount is the header's summary, e.g. "   6 agents · 1 running": the
+// count the tmux status strip, which shows only marks, does not give.
+func agentCount() string {
+	if len(sessions) == 0 {
+		return ""
+	}
+	running := 0
+	for _, s := range sessions {
+		if s.state == StateActive {
+			running++
+		}
+	}
+	noun := "agents"
+	if len(sessions) == 1 {
+		noun = "agent"
+	}
+	return fmt.Sprintf("   %d %s · %d running", len(sessions), noun, running)
 }
 
 // iconSet is the pair of symbols drawn in the left margin of a row: one for a
@@ -1163,7 +1204,7 @@ func renderDashboard(selected int, preview bool) {
 	b.WriteString("\033[2J\033[H") // clear entire screen, go home
 
 	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s\n\n", bold, reset, dim, ts, reset)
+	fmt.Fprintf(&b, "%s  cc-watch%s  %s%s%s%s\n\n", bold, reset, dim, ts, agentCount(), reset)
 	// "    " (4) = 2 spaces + pointer slot (2) — same as row prefix
 	fmt.Fprintf(&b, "    %s%-*s  %-*s  %s%s\n", bold,
 		nameWidth, "SESSION", stateWidth, "STATE", "LAST PROMPT", reset)
@@ -1357,26 +1398,41 @@ func runeColumns(r rune) int {
 	return 1
 }
 
-// updateStatusBar publishes a numbered, state-coloured strip of the detected
-// agents to a tmux user option, e.g. "1 2 3" with 1 yellow and 2 green. The
-// numbers are positional over the same sorted list the TUI renders, so agent N
-// in the status bar is row N in the dashboard — which also means they shift
-// when a pane appears or dies. The option is inert until referenced, so the
-// user places it themselves: set -ag status-right ' #{@cc_watch_agents}'.
+// updateStatusBar publishes a strip of the detected agents to a tmux user
+// option: one icon per agent, in the order the dashboard lists them, coloured
+// by state. The option is inert until referenced, so the user places it
+// themselves: set -ag status-right ' #{@cc_watch_agents}'.
 func updateStatusBar(ctx context.Context) {
+	setStatusOption(ctx, statusStrip())
+}
+
+// statusStrip is the value updateStatusBar publishes: the icon set's empty
+// mark for every agent, coloured by its state, turned into the full mark, in
+// bold yellow, for one with a notification not seen yet — yellow whatever its
+// state, as in the dashboard's margin, so it stands out until it is seen. Marks rather than numbers:
+// a strip of icons reads at a glance, and the dashboard's header carries the
+// count. The space between marks also leaves room for a glyph the font draws
+// wider than its cell, as many Nerd Font icons are, which would otherwise
+// run into the next one.
+func statusStrip() string {
 	var b strings.Builder
 	for i, key := range sortedNames() {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
-		// Trailing #[default] stops our colour leaking into whatever the user
-		// has placed after the strip in their status format.
-		fmt.Fprintf(&b, "#[fg=%s]%d", sessions[key].state.tmuxColor(), i+1)
+		s := sessions[key]
+		if s.unread {
+			fmt.Fprintf(&b, "#[fg=yellow,bold]%s#[nobold]", icons().unread)
+			continue
+		}
+		fmt.Fprintf(&b, "#[fg=%s]%s", s.state.tmuxColor(), icons().bell)
 	}
+	// Trailing #[default] stops our colour leaking into whatever the user
+	// has placed after the strip in their status format.
 	if b.Len() > 0 {
 		b.WriteString("#[default]")
 	}
-	setStatusOption(ctx, b.String())
+	return b.String()
 }
 
 var lastStatus string // last value pushed, so unchanged polls cause no redraw
@@ -1405,13 +1461,58 @@ func clearStatusBar() {
 	exec.Command("tmux", "refresh-client", "-S").Run()
 }
 
+// sortedNames are the keys of sessions in display order: by the pane's
+// "session:W.P" name, so the list reads alphabetically whatever the keys are.
 func sortedNames() []string {
-	names := make([]string, 0, len(sessions))
-	for name := range sessions {
-		names = append(names, name)
+	keys := make([]string, 0, len(sessions))
+	for key := range sessions {
+		keys = append(keys, key)
 	}
-	sort.Strings(names)
-	return names
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := sessions[keys[i]].name, sessions[keys[j]].name
+		if sa, sb := tmuxSession(a), tmuxSession(b); sa != sb {
+			return sa < sb
+		}
+		// Within a session, by window then pane, as numbers: window 10
+		// after window 2.
+		wa, pa := paneIndexes(a)
+		wb, pb := paneIndexes(b)
+		if wa != wb {
+			return wa < wb
+		}
+		if pa != pb {
+			return pa < pb
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+// paneIndexes reads the window and pane indexes off a "session:W.P" name; -1
+// for either that is missing.
+func paneIndexes(name string) (window, pane int) {
+	window, pane = -1, -1
+	i := strings.LastIndex(name, ":")
+	if i < 0 {
+		return
+	}
+	w, p, _ := strings.Cut(name[i+1:], ".")
+	if n, err := strconv.Atoi(w); err == nil {
+		window = n
+	}
+	if n, err := strconv.Atoi(p); err == nil {
+		pane = n
+	}
+	return
+}
+
+// tmuxTarget turns a sessions key into a tmux target: a pane id is one as it
+// is, and the "session:W.P" key an older daemon sends needs an exact-match '='.
+func tmuxTarget(key string) string {
+	if strings.HasPrefix(key, "%") {
+		return key
+	}
+	return "=" + key
 }
 
 // truncate cuts to n columns, counting runes rather than bytes: prompt text can

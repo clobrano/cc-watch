@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -122,5 +123,76 @@ func TestApplyCommandTogglesBell(t *testing.T) {
 	applyCommand(command{Bell: "gone:0.0"}) // unknown sessions are ignored
 	if sessions["notes:0.1"].bell {
 		t.Fatal("bell not turned off")
+	}
+}
+
+func TestSessionsKeyedByPaneID(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+
+	// Rows are keyed by pane id but listed by name, and a session name is
+	// shown in full only where it has more than one agent pane.
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%7", Name: "zeta:0.0"},
+		{ID: "%2", Name: "api:1.0"},
+		{ID: "%9", Name: "api:0.1"},
+	}})
+	keys := sortedNames()
+	if want := []string{"%9", "%2", "%7"}; !reflect.DeepEqual(keys, want) {
+		t.Fatalf("sortedNames = %q, want %q", keys, want)
+	}
+	if got, want := sessionNames(keys), []string{"api:0.1", "api:1.0", "zeta"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionNames = %q, want %q", got, want)
+	}
+	if tmuxTarget("%9") != "%9" {
+		t.Error("a pane id is not used as its own target")
+	}
+
+	// An older daemon sends no id: its rows are keyed, and targeted, by name.
+	applySnapshot(snapshot{Sessions: []snapshotRow{{Name: "notes:0.1"}}})
+	if _, ok := sessions["notes:0.1"]; !ok {
+		t.Fatal("a row without an id is not keyed by its name")
+	}
+	if got := tmuxTarget("notes:0.1"); got != "=notes:0.1" {
+		t.Errorf("tmuxTarget(name) = %q", got)
+	}
+}
+
+func TestSessionNameWithColon(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+	// tmux allows ':' in a session name; only the last one separates the
+	// window and pane.
+	long := "OSAC-6011:-Design-Expose-ComputeInstance-Provisioning-Failures"
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%27", Name: long + ":0.0"},
+		{ID: "%30", Name: "OSAC-6011:1.0"},
+	}})
+	got := sessionNames(sortedNames())
+	if want := []string{"OSAC-6011", long}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionNames = %q, want %q", got, want)
+	}
+	// Two panes of the colon session: both are told apart by window.pane.
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%27", Name: long + ":0.0"},
+		{ID: "%39", Name: long + ":1.0"},
+	}})
+	got = sessionNames(sortedNames())
+	if want := []string{long + ":0.0", long + ":1.0"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionNames = %q, want %q", got, want)
+	}
+}
+
+func TestSortedNamesNumericIndexes(t *testing.T) {
+	old := sessions
+	defer func() { sessions = old }()
+	applySnapshot(snapshot{Sessions: []snapshotRow{
+		{ID: "%1", Name: "api:10.0"},
+		{ID: "%2", Name: "api:2.1"},
+		{ID: "%3", Name: "api:2.0"},
+		{ID: "%4", Name: "a:b:0.0"}, // session "a:b" sorts before "api"
+	}})
+	if got, want := sortedNames(), []string{"%4", "%3", "%2", "%1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sortedNames = %q, want %q", got, want)
 	}
 }
