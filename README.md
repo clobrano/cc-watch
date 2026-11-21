@@ -9,6 +9,8 @@ is hard to tell which one is still thinking, which one is waiting for your input
 and which one has quit. `cc-watch` polls tmux, classifies every agent pane, and
 lets you jump straight to the one that needs you.
 
+![cc-watch: the dashboard, a bell on a session, and the tmux status line](demo/cc-watch.gif)
+
 ```
   cc-watch  15:04:05   5 agents · 1 running
 
@@ -538,6 +540,21 @@ promptScrollback = 400              // one-off deeper capture, to find the promp
                                     // of a turn already running when a pane is
                                     // first seen
 ```
+
+## Recording the demo
+
+The animation at the top is recorded with [VHS](https://github.com/charmbracelet/vhs)
+from `demo/demo.tape`. To record it again, from the repository root, with `vhs`,
+`tmux` and `go` installed:
+
+```sh
+vhs demo/demo.tape
+```
+
+It runs on a private tmux server (`tmux -L cc-watch-demo`) with scripted stand-in
+agents from `demo/bin`, and gives cc-watch its own config and runtime directory,
+so neither your tmux sessions nor your own cc-watch daemon are touched, and no
+desktop notification is sent.
 
 ## License
 

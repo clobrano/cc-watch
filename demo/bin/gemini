@@ -1,0 +1,10 @@
+#!/bin/bash
+. "$(dirname "$0")/../agent.sh"
+prompt "why is the integration suite flaky?"
+work 10 "Running the suite 10 times"
+done_ "3 of 10 runs failed in TestRetryBackoff"
+work 12 "Reading the test"
+done_ "The test sleeps 100ms and expects the retry to have fired; under load it has not."
+done_ "Fix: wait on the retry channel instead of sleeping."
+box
+idle
