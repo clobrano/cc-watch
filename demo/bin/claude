@@ -1,0 +1,10 @@
+#!/bin/bash
+. "$(dirname "$0")/../agent.sh"
+prompt "add rate limiting to the /search endpoint"
+work 9 "Reading search/handler.go"
+done_ "Read search/handler.go, middleware/limit.go"
+work 10 "Writing the limiter"
+done_ "Edited search/handler.go \e[32m(+42\e[0m \e[31m−3)\e[0m"
+done_ "Tests pass: \e[32mok\e[0m  example.com/api/search  0.41s"
+box
+idle
