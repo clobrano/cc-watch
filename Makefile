@@ -15,9 +15,10 @@ test: ## Vet and run the tests
 	go vet ./...
 	go test ./...
 
-demo: ## Record demo/cc-watch.gif with VHS (needs vhs, tmux and go)
+demo: ## Record demo/cc-watch.gif and demo/statusbar.gif (needs vhs, tmux, go and ffmpeg)
 	@command -v vhs >/dev/null || { echo "vhs not found: see https://github.com/charmbracelet/vhs#installation" >&2; exit 1; }
 	vhs demo/demo.tape
+	demo/statusbar.sh
 
 clean: ## Remove the built binary
 	rm -f $(BINARY)

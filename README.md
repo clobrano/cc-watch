@@ -335,10 +335,19 @@ set -ag status-left ' #{@cc_watch_agents}'
 set -g  status-left-length 40
 ```
 
+A label makes it easy to spot among the rest of your status line:
+
+```tmux
+set -ag status-right ' #[fg=colour245]cc-watch#[default] #{@cc_watch_agents}'
+```
+
 Reload with `tmux source-file ~/.tmux.conf`. You do not need to touch
 `status-interval` — cc-watch redraws clients itself when the strip changes.
 
-You then get an at-a-glance indicator from any session:
+You then get an at-a-glance indicator from any session — here through the demo
+at the top, as agents finish, one sends a notification, and it is seen:
+
+![The cc-watch strip in the tmux status line](demo/statusbar.gif)
 
 ```
                                               AGENTS ◇ ◆ ◇ ◇
@@ -562,7 +571,9 @@ promptScrollback = 400              // one-off deeper capture, to find the promp
 ## Recording the demo
 
 The animation at the top is recorded with [VHS](https://github.com/charmbracelet/vhs)
-from `demo/demo.tape`. To record it again, with `vhs`, `tmux` and `go` installed:
+from `demo/demo.tape`, and the status line close-up is cut out of it by
+`demo/statusbar.sh`. To record both again, with `vhs`, `tmux`, `go` and `ffmpeg`
+installed:
 
 ```sh
 make demo
