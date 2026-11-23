@@ -37,7 +37,12 @@ every session, keeps the ones running a configured agent (`claude`, `codex`,
 `gemini`, `opencode` and `pi` by default), and inspects each of them:
 
 - the pane title, via `tmux display-message -p '#{pane_title}'`
-- the last 80 lines of output, via `tmux capture-pane -p`
+- the last 80 lines of output, via `tmux capture-pane -p -e` (the colours are kept
+  only for the [preview](#usage); everything else reads the plain text)
+
+Panes are tracked by their tmux pane id (`%12`), which stays the same for the life
+of the pane, so renaming a session or moving a window only relabels its row: its
+state and its [bell](#notifications) carry over.
 
 ### Finding the agent behind its process name
 
@@ -83,8 +88,8 @@ From those two signals it derives a state:
 | --------- | ------ | ---------------------------------------------------------------------------- |
 | `...`     | grey   | Pane seen for the first time; held until enough output has been observed to classify |
 | `running` | yellow | The agent is working — a braille spinner in the pane title, or output still changing |
-| `waiting` | blue   | The agent is sitting at its input and nothing has changed for 5 seconds. Two shapes are recognised: the box Gemini CLI and older Claude Code builds draw around the input, and the bare marker line Codex and newer Claude Code builds use instead |
-| `idle`    | yellow | Output has been unchanged for 5 seconds with no input on screen               |
+| `waiting` | blue   | The agent is sitting at its input and nothing has changed for 5 seconds. Three shapes are recognised: the box Gemini CLI and older Claude Code builds draw around the input, the bare marker line Codex and newer Claude Code builds use instead, and the editor pi draws between two rules |
+| `idle`    | grey   | Output has been unchanged for 5 seconds with no input on screen               |
 | `error`   | red    | The tail of the pane is a bare shell prompt — the agent exited                |
 | `unknown` | grey   | The pane is empty                                                            |
 
@@ -102,7 +107,7 @@ moved on means the agent is working. A spinner frozen by a crashed agent does
 not, and neither does braille that is part of the output.
 
 Each row is marked with the agent running in it — `CL` for Claude Code, `CX` for
-Codex, `GM` for Gemini CLI, `OC` for opencode — so a screen of mixed sessions
+Codex, `GM` for Gemini CLI, `OC` for opencode, `PI` for pi — so a screen of mixed sessions
 stays readable. The mark rides at the front of the session column rather than
 taking a column of its own, so it costs the `LAST PROMPT` text nothing. An agent
 with no mark of its own is marked with its uppercased initial, and `agent_icons`
@@ -191,7 +196,7 @@ cc-watch
 | Key             | Action                    |
 | --------------- | ------------------------- |
 | `↑` / `↓`       | Move the selection        |
-| `↵` (Enter)     | Attach to the selected pane's session |
+| `↵` (Enter)     | Jump to the selected pane |
 | `b`             | Turn the [bell](#notifications) on or off for the selected session |
 | `p`             | Show or hide the preview  |
 | `q` / `Ctrl-C`  | Quit                      |
@@ -248,7 +253,8 @@ Each turn sends one notification. Turning the bell on for a session that has bee
 waiting for a while does not send one; the next finished turn does.
 
 Until you get to it, the session is flagged in the dashboard: the mark turns
-into a bold `◆`.
+into a bold yellow `◆`, and the same mark shows in the
+[tmux status line](#tmux-status-bar).
 
 ```
 ◇   CL api                    running    add rate limiting to the /search endpoint
@@ -262,7 +268,8 @@ answered it from elsewhere, or when you turn its bell off.
 
 The bell belongs to the daemon, not the dashboard, so the notification arrives
 whether or not a dashboard is open. Bells last as long as the daemon and the
-pane: restarting the daemon, or closing the pane, turns them off.
+pane: restarting the daemon, or closing the pane, turns them off. Renaming the
+session does not.
 
 ### Icons
 
@@ -337,7 +344,7 @@ You then get an at-a-glance indicator from any session:
                                               AGENTS ◇ ◆ ◇ ◇
                                                      │ │ │ └─ blue:   waiting on you
                                                      │ │ └─── grey:   idle
-                                                     │ └───── notified, not seen yet
+                                                     │ └───── bold yellow: notified, not seen yet
                                                      └─────── yellow: running
 ```
 
@@ -403,8 +410,9 @@ second call sees the first daemon and exits.
 
 Dashboards connect to the daemon's socket and receive one JSON snapshot per
 line: the latest one immediately on connect, then a fresh one after every poll.
-The stream is one-way and fans out to every client, so ten open dashboards cost
-tmux no more than one. A dashboard that stops reading is dropped after a few
+The stream fans out to every client, so ten open dashboards cost tmux no more
+than one. The other way, a dashboard sends only the odd command, also one JSON
+object per line: turning a bell on or off, or marking a notification seen. A dashboard that stops reading is dropped after a few
 seconds rather than holding the daemon up. If the daemon goes away underneath a
 dashboard, the dashboard exits with `lost connection to the daemon`.
 
@@ -419,7 +427,7 @@ State lives in `$XDG_RUNTIME_DIR/cc-watch/` (falling back to
 | ------------ | ----------------------------------------------------------------- |
 | `daemon.pid` | The daemon's pid, and the lock file that makes "running" knowable  |
 | `daemon.sock` | The socket dashboards connect to                                  |
-| `daemon.log` | Daemon start/stop lines — the first place to look if `--serve` fails |
+| `daemon.log` | Daemon start/stop lines, the notifier it picked, and any notification that failed to send — the first place to look if `--serve` or notifications fail |
 
 Liveness is an advisory lock (`flock`) on the pid file, not the pid itself. The
 kernel drops the lock when the holder dies, so a daemon that is `SIGKILL`ed leaves
@@ -472,6 +480,13 @@ cc-watch doctor
 
 config:  /home/u/.config/cc-watch/config.json (absent) — built-in defaults
 agents:  claude, codex, gemini, opencode, pi
+notify:  notify-send (try it with --notify-test)
+icons:   unicode
+           unicode  bell on ◇   not seen yet ◆
+           nerd     bell on    not seen yet 
+           ascii    bell on o   not seen yet !
+         Pick a set whose symbols all show above; a box or a blank means
+         the terminal's font lacks them. Set it with "icons" in the config.
 
 PANE                      COMMAND         PID       AGENT
 ------------------------------------------------------------------------
