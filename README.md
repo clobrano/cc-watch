@@ -575,4 +575,4 @@ desktop notification is sent.
 
 ## License
 
-See the repository for license information.
+[MIT](LICENSE)
