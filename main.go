@@ -1036,17 +1036,18 @@ func toDisplay(s string) string {
 
 // Column widths for the dashboard.
 //
-// The session column grows to fit the longest name, from minNameWidth up to
-// maxNameWidth, but never so far that the prompt column drops below
-// minDescWidth — on a narrow terminal it gives the columns back, down to
-// minNameWidth.
+// The session and prompt columns share what the line has left after the
+// fixed parts. The session column grows to fit the longest name, up to half of
+// that, and the prompt column takes the rest: never narrower than the session
+// column, and all of the room when the names are short. Prompts are mostly
+// short, and the preview below shows the whole pane, so long session names —
+// whole ticket titles, often — get the room they need. The session column
+// never drops below minNameWidth, even on a terminal too narrow to split.
 //
 // Using ASCII ">" for the pointer — unicode triangles render as 2-column wide
 // glyphs in most terminals, which breaks column alignment.
 const (
 	minNameWidth = 24
-	maxNameWidth = 40
-	minDescWidth = 30
 	stateWidth   = 9
 	gap          = 2
 	rightMargin  = 3 // keeps lines from touching the edge
@@ -1068,11 +1069,9 @@ func nameColumnWidth(names []string, w int) int {
 			nw = l
 		}
 	}
-	if nw > maxNameWidth {
-		nw = maxNameWidth
-	}
-	if fit := w - prefixWidth(0) - rightMargin - minDescWidth; nw > fit {
-		nw = fit
+	// prefixWidth(0) is everything on the line but the two shared columns.
+	if half := (w - prefixWidth(0) - rightMargin) / 2; nw > half {
+		nw = half
 	}
 	if nw < minNameWidth {
 		nw = minNameWidth

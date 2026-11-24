@@ -406,11 +406,12 @@ func TestNameColumnWidth(t *testing.T) {
 		w     int
 		want  int
 	}{
-		{[]string{"CL notes"}, 120, minNameWidth},                                      // short names keep the minimum
-		{[]string{"CL " + strings.Repeat("a", 30)}, 120, 33},                           // grows to fit
-		{[]string{"CL " + long}, 200, maxNameWidth},                                    // capped
-		{[]string{"CL " + long}, 80, 80 - prefixWidth(0) - rightMargin - minDescWidth}, // leaves the prompt room
-		{[]string{"CL " + long}, 40, minNameWidth},                                     // never below the minimum
+		{[]string{"CL notes"}, 120, minNameWidth},                               // short names keep the minimum
+		{[]string{"CL " + strings.Repeat("a", 30)}, 120, 33},                    // grows to fit
+		{[]string{"CL " + long}, 200, 63},                                       // a wide terminal fits it whole
+		{[]string{"CL " + long}, 120, (120 - prefixWidth(0) - rightMargin) / 2}, // at most half the shared room
+		{[]string{"CL " + long}, 80, 30},                                        // half of 60 on 80 columns
+		{[]string{"CL " + long}, 40, minNameWidth},                              // never below the minimum
 	}
 	for _, c := range cases {
 		if got := nameColumnWidth(c.names, c.w); got != c.want {
