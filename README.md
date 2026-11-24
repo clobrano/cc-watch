@@ -208,8 +208,11 @@ agent is done. The preview's rule and left gutter take the colour of the selecte
 row's state, which sets it apart from the list. The preview
 shrinks to fit the terminal height, and is left out when fewer than 3 lines fit.
 
-The session column widens to fit the longest name, from 24 up to 40 columns, but
-never so far that the prompt column drops below 30 columns.
+The session and prompt columns share the width of the terminal. The session
+column widens to fit the longest name, up to half of that shared width (and never
+below 24 columns), and the prompt column takes the rest, so it is never narrower
+than the session column. Prompts are usually short, and the preview shows the
+full pane anyway, so long session names, like whole ticket titles, are given room.
 
 Attaching adapts to where you are running from:
 
