@@ -287,6 +287,8 @@ const (
 	keyQuit    keyEvent = -4
 	keyPreview keyEvent = -5
 	keyBell    keyEvent = -6
+	keyTop     keyEvent = -7
+	keyBottom  keyEvent = -8
 )
 
 var (
@@ -470,6 +472,18 @@ func runTUI() error {
 					render(selected)
 				}
 
+			case keyTop:
+				if selected != 0 {
+					selected = 0
+					render(selected)
+				}
+
+			case keyBottom:
+				if last := len(sortedNames()) - 1; last >= 0 && selected != last {
+					selected = last
+					render(selected)
+				}
+
 			case keyEnter:
 				names := sortedNames()
 				if len(names) == 0 || selected >= len(names) {
@@ -532,33 +546,54 @@ func readKeys(tty *os.File, ch chan<- keyEvent) {
 		if err != nil || n == 0 {
 			return
 		}
-		b := buf[:n]
-		// A read can hold several keys — typed quickly, pasted, or sent by
-		// tmux send-keys — so walk all of it rather than only its first key.
-		for i := 0; i < len(b); i++ {
-			// Arrow keys arrive as ESC [ A (up) / ESC [ B (down).
-			if b[i] == 0x1b && i+2 < len(b) && b[i+1] == '[' {
-				switch b[i+2] {
-				case 'A':
-					ch <- keyUp
-				case 'B':
-					ch <- keyDown
-				}
-				i += 2
-				continue
-			}
-			switch c := b[i]; c {
-			case '\r', '\n':
-				ch <- keyEnter
-			case 'q', 'Q', 0x03 /* Ctrl-C */ :
-				ch <- keyQuit
-			case 'p', 'P':
-				ch <- keyPreview
-			case 'b', 'B':
-				ch <- keyBell
-			}
+		for _, k := range decodeKeys(buf[:n]) {
+			ch <- k
 		}
 	}
+}
+
+// decodeKeys turns one read from the terminal into the keys it holds. A read
+// can hold several — typed quickly, pasted, or sent by tmux send-keys — so all
+// of it is walked rather than only its first key. Bytes that are no key the
+// dashboard knows are skipped.
+//
+// Moving takes the arrow keys or vim's: j/k down and up, g/G to the top and
+// bottom of the list. g and G differ, so unlike the other letters they are not
+// read case-blind.
+func decodeKeys(b []byte) []keyEvent {
+	var keys []keyEvent
+	for i := 0; i < len(b); i++ {
+		// Arrow keys arrive as ESC [ A (up) / ESC [ B (down).
+		if b[i] == 0x1b && i+2 < len(b) && b[i+1] == '[' {
+			switch b[i+2] {
+			case 'A':
+				keys = append(keys, keyUp)
+			case 'B':
+				keys = append(keys, keyDown)
+			}
+			i += 2
+			continue
+		}
+		switch b[i] {
+		case 'k':
+			keys = append(keys, keyUp)
+		case 'j':
+			keys = append(keys, keyDown)
+		case 'g':
+			keys = append(keys, keyTop)
+		case 'G':
+			keys = append(keys, keyBottom)
+		case '\r', '\n':
+			keys = append(keys, keyEnter)
+		case 'q', 'Q', 0x03 /* Ctrl-C */ :
+			keys = append(keys, keyQuit)
+		case 'p', 'P':
+			keys = append(keys, keyPreview)
+		case 'b', 'B':
+			keys = append(keys, keyBell)
+		}
+	}
+	return keys
 }
 
 func update(ctx context.Context) {
@@ -1279,7 +1314,7 @@ func renderDashboard(selected int, preview bool) {
 		}
 	}
 
-	fmt.Fprintf(&b, "\n  %s↑↓ select   ↵ attach   b bell   p preview   q quit%s\n", dim, reset)
+	fmt.Fprintf(&b, "\n  %s↑↓/jk select   ↵ attach   b bell   p preview   q quit%s\n", dim, reset)
 	b.WriteString("\033[J")
 
 	// raw mode clears OPOST/ONLCR so \n no longer implies \r; use \r\n explicitly.

@@ -195,7 +195,8 @@ cc-watch
 
 | Key             | Action                    |
 | --------------- | ------------------------- |
-| `↑` / `↓`       | Move the selection        |
+| `↑` / `↓`, `k` / `j` | Move the selection up / down |
+| `g` / `G`       | Jump to the first / last session |
 | `↵` (Enter)     | Jump to the selected pane |
 | `b`             | Turn the [bell](#notifications) on or off for the selected session |
 | `p`             | Show or hide the preview  |
