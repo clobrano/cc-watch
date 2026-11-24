@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -585,6 +586,26 @@ func TestSpinnerFrames(t *testing.T) {
 	for _, p := range []string{geminiPane, claudePane, codexPane, piPane, "⠀⠀⠀"} {
 		if got := spinnerFrames(p, "✳ Claude Code"); got != "" {
 			t.Errorf("spinnerFrames(%.20q) = %q, want none", p, got)
+		}
+	}
+}
+
+func TestDecodeKeys(t *testing.T) {
+	for in, want := range map[string][]keyEvent{
+		"j":         {keyDown},
+		"k":         {keyUp},
+		"g":         {keyTop},
+		"G":         {keyBottom},
+		"\x1b[A":    {keyUp},
+		"\x1b[B":    {keyDown},
+		"\x1b[Bb":   {keyDown, keyBell}, // an arrow and a key in one read
+		"jjk":       {keyDown, keyDown, keyUp},
+		"\rqQ\x03":  {keyEnter, keyQuit, keyQuit, keyQuit},
+		"pPbB":      {keyPreview, keyPreview, keyBell, keyBell},
+		"xJK\x1b[C": nil, // unknown keys, capitals of j/k, right arrow
+	} {
+		if got := decodeKeys([]byte(in)); !reflect.DeepEqual(got, want) {
+			t.Errorf("decodeKeys(%q) = %v, want %v", in, got, want)
 		}
 	}
 }
