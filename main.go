@@ -271,8 +271,9 @@ type session struct {
 	tail         []string // last lines of the pane, for the dashboard preview
 
 	// Notifications, see notify.go.
-	bell         bool      // the user asked to be told when this turn ends
+	bell         bool      // notify when this turn ends: on unless the user silenced it
 	armed        bool      // seen running since the last time it settled waiting
+	armFrom      time.Time // only activity after this arms the bell; see update
 	waitingSince time.Time // start of the current waiting stretch, if any
 	unread       bool      // notified, and the user has not been to it since
 	visible      bool      // on someone's screen in tmux right now
@@ -653,8 +654,11 @@ func update(ctx context.Context) {
 			s.name = p.key
 		} else {
 			color, _ := captureColor(ctx, target, paneLines)
+			// Every agent's bell starts on; b silences one. It still rings
+			// only for a turn seen running, so an agent already waiting when
+			// it is found does not notify.
 			s = &session{id: p.id, name: p.key, agent: agent, lastChange: time.Now(), state: StateStarting,
-				lastActivity: activityKey(stripANSI(color)), colorPane: color}
+				lastActivity: activityKey(stripANSI(color)), colorPane: color, bell: true}
 			// Pay for one deep capture here, not on every poll: from now on the
 			// prompt is sticky and the paneLines window is enough to notice a
 			// newer one.
@@ -691,6 +695,13 @@ func update(ctx context.Context) {
 			recheck = append(recheck, spinnerCheck{s: s, target: target, pane: pane, title: title, frames: frames})
 		}
 
+		// The first classification compares the pane with how it looked
+		// when it was found, which for a fresh agent is mid-way through
+		// drawing its banner. That difference reads as running, but no turn
+		// is behind it: only activity after this point may arm the bell.
+		if s.state == StateStarting {
+			s.armFrom = s.lastChange
+		}
 		s.state = classify(pane, strings.TrimSpace(title), s.lastChange)
 		s.desc = extractDesc(pane)
 		// Only overwrite on a hit: once the turn's output has pushed the prompt

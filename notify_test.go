@@ -163,3 +163,26 @@ func TestAgentCount(t *testing.T) {
 		t.Errorf("agentCount = %q, want %q", got, want)
 	}
 }
+
+func TestFirstClassificationDoesNotArm(t *testing.T) {
+	const after = 10 * time.Second
+	t0 := time.Now()
+	// A fresh agent: its first classification saw it drawing its banner, so
+	// it reads as running, but that change is where arming starts from.
+	s := &session{bell: true, state: StateActive, lastChange: t0, armFrom: t0}
+	trackBell(s, t0, after)
+	s.state = StateWaiting
+	trackBell(s, t0.Add(5*time.Second), after)
+	if trackBell(s, t0.Add(20*time.Second), after) {
+		t.Fatal("rang for an agent that only drew its screen")
+	}
+
+	// Its first real turn: the pane changes after that point.
+	s.state, s.lastChange = StateActive, t0.Add(30*time.Second)
+	trackBell(s, t0.Add(30*time.Second), after)
+	s.state = StateWaiting
+	trackBell(s, t0.Add(36*time.Second), after)
+	if !trackBell(s, t0.Add(47*time.Second), after) {
+		t.Fatal("did not ring for a real turn")
+	}
+}
