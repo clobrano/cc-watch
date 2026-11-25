@@ -9,7 +9,7 @@ is hard to tell which one is still thinking, which one is waiting for your input
 and which one has quit. `cc-watch` polls tmux, classifies every agent pane, and
 lets you jump straight to the one that needs you.
 
-![cc-watch: the dashboard, a bell on a session, and the tmux status line](demo/cc-watch.gif)
+![cc-watch: the dashboard, a notification, and the tmux status line](demo/cc-watch.gif)
 
 ```
   cc-watch  15:04:05   5 agents · 1 running
@@ -198,7 +198,7 @@ cc-watch
 | `↑` / `↓`, `k` / `j` | Move the selection up / down |
 | `g` / `G`       | Jump to the first / last session |
 | `↵` (Enter)     | Jump to the selected pane |
-| `b`             | Turn the [bell](#notifications) on or off for the selected session |
+| `b`             | Silence the selected session's [bell](#notifications), or turn it back on |
 | `p`             | Show or hide the preview  |
 | `q` / `Ctrl-C`  | Quit                      |
 
@@ -243,18 +243,21 @@ once on the same poller. Quitting a dashboard leaves the daemon running.
 
 ## Notifications
 
-Press `b` on a session to turn on its bell; the row is marked with a dim `◇` in
-the left margin (see [Icons](#icons) for other symbols). When a session with the bell on finishes a turn, going from
-`running` to `waiting`, you get a desktop notification titled after the session —
-"notes is waiting", or "notes:0.1 is waiting" when that tmux session has more
-than one agent pane — with its last prompt as the body.
+Every agent has its bell on from the moment cc-watch finds it, which the dim `◇`
+in the left margin of its row shows (see [Icons](#icons) for other symbols). When
+it finishes a turn, going from `running` to `waiting`, you get a desktop
+notification titled after the session — "notes is waiting", or "notes:0.1 is
+waiting" when that tmux session has more than one agent pane — with its last
+prompt as the body. Press `b` on a session to silence it, which drops the mark,
+and `b` again to turn its bell back on.
 
 The notification waits until the session has stayed `waiting` for `notify_after`
 seconds (10 by default). That comes on top of the 5 seconds of unchanged output
 the classifier already needs before it calls a pane `waiting`, so a pause in the
 middle of a turn does not set off the bell for an agent that is about to carry on.
-Each turn sends one notification. Turning the bell on for a session that has been
-waiting for a while does not send one; the next finished turn does.
+Each turn sends one notification, and only for a turn cc-watch saw running: an
+agent that was already waiting when cc-watch found it, or that has been waiting a
+while when you turn its bell back on, sends none until its next finished turn.
 
 Until you get to it, the session is flagged in the dashboard: the mark turns
 into a bold yellow `◆`, and the same mark shows in the
@@ -262,8 +265,12 @@ into a bold yellow `◆`, and the same mark shows in the
 
 ```
 ◇   CL api                    running    add rate limiting to the /search endpoint
+    CL docs                   waiting    document the new --serve flag
 ◆ > CL notes                  waiting    fix the parser
 ```
+
+Here `api` is working with its bell on, `docs` has been silenced, and `notes` has
+finished a turn you have not looked at yet.
 
 The flag clears as soon as you have been to the session: when it is on screen in
 tmux (the active pane of the active window of an attached session), when you
@@ -271,9 +278,9 @@ attach to it from the dashboard, when it starts running again because you
 answered it from elsewhere, or when you turn its bell off.
 
 The bell belongs to the daemon, not the dashboard, so the notification arrives
-whether or not a dashboard is open. Bells last as long as the daemon and the
-pane: restarting the daemon, or closing the pane, turns them off. Renaming the
-session does not.
+whether or not a dashboard is open. A silenced session stays silent as long as
+the daemon and the pane last: a new pane, or a restarted daemon, starts with the
+bell on again. Renaming the session keeps it silenced.
 
 ### Icons
 

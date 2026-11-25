@@ -28,8 +28,12 @@ Wait+Screen@90s /waiting/
 Sleep 1s
 Show
 
-# Four agents: some running, some waiting on you.
+# Four agents: some running, some waiting on you, every one with its bell on.
 Sleep 3s
+
+# Silence "api": it will finish without a notification.
+Type "b"
+Sleep 2s
 
 # The preview follows the selection.
 Down
@@ -39,9 +43,8 @@ Sleep 1.5s
 Down
 Sleep 2s
 
-# Ring the bell when "notes" finishes its turn...
-Type "b"
-# ...it has: the mark fills in, in the list and in the tmux status line.
+# When "notes" finishes its turn, the mark fills in, in the list and in the
+# tmux status line.
 Wait+Screen@60s /◆/
 Sleep 3s
 

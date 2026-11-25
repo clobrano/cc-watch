@@ -42,7 +42,12 @@ func (c Config) notifyAfter() time.Duration {
 func trackBell(s *session, now time.Time, after time.Duration) bool {
 	switch s.state {
 	case StateActive:
-		s.armed = true
+		// Running counts once the pane has changed since its first
+		// classification: the change that classification saw may be no more
+		// than the agent drawing its screen when it was found.
+		if s.armFrom.IsZero() || s.lastChange.After(s.armFrom) {
+			s.armed = true
+		}
 		s.waitingSince = time.Time{}
 	case StateWaiting:
 		if s.waitingSince.IsZero() {
